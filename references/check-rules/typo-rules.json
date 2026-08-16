@@ -1,0 +1,115 @@
+{
+  "domain": "写作（用词检测）",
+  "rules": [
+    {
+      "type": "pair",
+      "wrong": "必竟",
+      "right": "毕竟",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "既使",
+      "right": "即使",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "既便",
+      "right": "即使",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "即然",
+      "right": "既然",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "按装",
+      "right": "安装",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "布署",
+      "right": "部署",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "融恰",
+      "right": "融洽",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "名符其实",
+      "right": "名副其实",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "帐户",
+      "right": "账户",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "罗嗦",
+      "right": "啰嗦",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "烦燥",
+      "right": "烦躁",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "急燥",
+      "right": "急躁",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "再接再励",
+      "right": "再接再厉",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "pair",
+      "wrong": "首当其充",
+      "right": "首当其冲",
+      "hint": "用词检测：「{wrong}」疑为「{right}」的错写"
+    },
+    {
+      "type": "regex",
+      "pattern": "([\\u4e00-\\u9fff])的(很|极了|要命|要死|不行|慌|紧|透)",
+      "hint": "用词检测：「{g1}的{g2}」疑为「{g1}得{g2}」（补语前用『得』）"
+    },
+    {
+      "type": "regex",
+      "pattern": "([\\u4e00-\\u9fff])\\1的(说|问|道|走|来|去|看|听|写|敲|推|拉|关|开|笑|哭|站|坐|躺)",
+      "hint": "用词检测：「{g1}{g1}的{g2}」疑为「{g1}{g1}地{g2}」（叠词状语后跟动词用『地』）"
+    },
+    {
+      "type": "wordlist",
+      "words": [
+        "凯旋归来",
+        "免费赠送",
+        "亲眼目睹",
+        "十分非常",
+        "差不多几乎",
+        "彻底根治",
+        "多余的赘述",
+        "涉及到",
+        "诉诸于",
+        "诉诸于法律"
+      ],
+      "hint": "语病模式：成分赘余「{word}」——删掉赘余部分（如『凯旋归来』→『凯旋』）"
+    }
+  ]
+}
