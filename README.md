@@ -29,8 +29,17 @@ init → outline → draft → revise → archive
 ## 安装
 
 ```bash
-git clone https://github.com/mrzhangkris/novel-writer.git ~/.dsh/skills/novel-writer
+git clone https://github.com/mrzhangkris/novel-writer.git
+# 把 novel-writer/SKILL.md 复制到你所用 runtime 的技能目录即可
 ```
+
+各 runtime 技能目录速查：
+
+| Runtime | 技能目录 |
+|---|---|
+| DSH | `~/.dsh/skills/` |
+| Claude Code | `~/.claude/skills/` |
+| Codex / Cursor / OpenClaw 等 | 按各自 skills 根目录约定 |
 
 ## 上游署名
 
