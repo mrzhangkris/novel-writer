@@ -205,7 +205,8 @@ def main():
     )
 
     # 5. 建书级流程状态（pipeline.py init 在书目录建 .story/pipeline.json）
-    rc = init_pipeline(book_root, args.slug, args.genre, args.platform, args.type)
+    type_aliases = {"长篇": "长篇小说", "短篇": "短故事"}
+    rc = init_pipeline(book_root, args.slug, args.genre, args.platform, type_aliases.get(args.type, args.type))
     if rc != 0:
         print(f"✗ pipeline init 失败（exit {rc}）——书目录已建但状态文件未就绪，请修复后重试", file=sys.stderr)
         return rc

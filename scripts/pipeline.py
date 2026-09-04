@@ -145,7 +145,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     state["project"] = args.project
     state["genre"] = args.genre
     state["platform"] = args.platform
-    state["type"] = args.type
+    # 类型名归一：word-count.json 的 key 是「长篇小说/短故事」，用户常写「长篇/短篇」
+    type_aliases = {"长篇": "长篇小说", "短篇": "短故事", "短故事篇": "短故事"}
+    state["type"] = type_aliases.get(args.type, args.type)
     state["chapter"] = 1
     state["checkpoints"]["cp1"] = "waiting"  # 选题确认
     save_state(root, state)

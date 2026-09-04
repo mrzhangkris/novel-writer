@@ -31,10 +31,13 @@ agent 只补 spec 判断项（写入 `chapters/chapter-NNN/spec.md`）：
 
 **只读 `spec.md`**，写 `chapters/chapter-NNN/draft.md`。不重读 concept/worldbuilding 全文（防信息倾泻）；查设定一律走 `story_query.py`（`--grep`/`--character`/`--foreshadow`/`--timeline`），不用 grep/read 翻账本。**draft.md 是纯正文**：不写 `#` 章节标题、不写元标注/创作笔记（G3 元标注校验会拒收）。
 
-**写前三查**：
+**写前三查 + 动笔避开项**：
 1. **主动选择+代价**：本章主角的主动选择是什么？代价是什么（`references/craft-canon.md` 特质 10 条）？答不出回大纲补
 2. **人物底线**：出场核心角色的行为撞不撞人物卡「底线」（`story_query.py --character 角色名` 查卡+快照）？撞了必须写出动机。再对照卡上优缺点——本章主角的挫折是否源于 flaw、高光是否源于 strength；违反则在 spec 注明理由（软对账，不硬拦）
 3. **世界观传达**：设定只通过角色行动/对话/观察传达，禁止旁白讲解
+4. **动笔就避开**（G5 阻断项，写满 2000 字再改要批量返工）：① 破折号「——」一处不用（对话打断用动作/短句）；② 「不是 X，是 Y」否定对比禁用；③ markdown 加粗/标题不进正文
+
+**写时同步填事务**（`.story/tx-chapter-NNN.json` 骨架已预填，只改变化部分）：角色变化、时间线（objective_fact + reader_knowledge 双视图）、伏笔动作、道具/秘密/誓约、`new_abilities`、该登记的 `rule_overrides`。
 
 **写时同步填事务**（`.story/tx-chapter-NNN.json` 骨架已预填，只改变化部分）：角色变化、时间线（fact + reader_knowledge 双视图）、伏笔动作、道具/秘密/誓约、`new_abilities`、该登记的 `rule_overrides`。
 
