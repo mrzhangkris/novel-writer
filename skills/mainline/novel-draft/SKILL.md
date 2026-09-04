@@ -66,7 +66,9 @@ python3 {SKILL_DIR}/scripts/chapter_flow.py finish --project {书目录}
 - `active_character_names` 必须恰好等于 `character_snapshots` 集合（少报缺快照/多报非核心）
 - 多线叙事必填 `context.thread`（缺省「主线」）；切线时 assemble_spec 自动带停点进下章 spec
 - `timeline` 每条分「客观事实 fact」与「读者认知 reader_knowledge」——写清读者此刻知道什么
-- `delta.result` ≤480 字节；`constraints` 一条一句只收字符串；delta 总字节 >1536 会收到体积警告（长期超标请精简）
+- `delta.result` ≤480 字节；`constraints` 一条一句只收字符串；delta 总字节 >3072 拒收、>1536 警告
+- **30 万字连载的字节预算经验**：每章事务按「≤2 条 timeline_events + ≤2 条 character_changes + ≤1 条 foreshadow_change」配额填写，超出必撞 3072 红线；角色 knowledge 数组是最容易膨胀的字段（每条都计字节）
+- spec 模板与正文都不写「——」；spec 里的协议条款/设定原文（如附则三全文）会被 check_spec_copy 判照搬——spec 引用设定时用概括而非全文抄录
 - 删改 `continuity_risks` 旧条目必须把原文逐字放进 `delta.retired_context_items`
 - 正文出现世界观敏感词：无意打破 → 改掉词面；有意打破 → `rule_overrides` 登记（同章 ≤3 条）
 - 未登记说话人（G4）：临时龙套可忽略（正文把「老人」类称谓改成名字可消警）；常驻角色必须进快照+changes+当场建卡

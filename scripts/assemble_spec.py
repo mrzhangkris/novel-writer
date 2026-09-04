@@ -449,6 +449,22 @@ def assemble(root: Path, chapter: int) -> str:
     if hooks and section_empty(tp):
         replace_section("题材要点", "（题材卡「章尾钩子」节，按本章择用）\n" + "\n".join(hooks) + "\n")
 
+    # 硬规则清单注入（每章必见——「戒不可脱」类永久锁死规则漏检一次就是 bug）
+    wb_path = root / "worldbuilding.md"
+    if wb_path.exists():
+        wb_text = wb_path.read_text(encoding="utf-8")
+        wm = re.search(r"##\s*硬规则清单[^\n]*\n(.*?)(?=\n## |\Z)", wb_text, flags=re.DOTALL)
+        hard_rules = [
+            l.strip()
+            for l in (wm.group(1).splitlines() if wm else [])
+            if l.strip().startswith("|") and "禁止" in l or l.strip().startswith("|") and "上限" in l or l.strip().startswith("|") and "唯一" in l
+        ]
+        if hard_rules and section("硬规则（本章不得违反）") == "" or not section("硬规则（本章不得违反）").strip():
+            replace_section(
+                "硬规则（本章不得违反）",
+                "\n".join(f"- {r}" for r in hard_rules[:8]) + "\n",
+            )
+
     # 规则注入（写作规则库写前投影：core 恒注入，standard 按平台过滤）
     rl = section("规则注入")
     if section_empty(rl):

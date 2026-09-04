@@ -33,6 +33,11 @@ def parse_outline_entries(outline: str) -> dict[int, dict[str, str]]:
         flags=re.DOTALL,
     ):
         chapter = int(m.group(1))
+        # 跳过已写章节的留档条目（「已写（第 N 章，原目标：…）」标记）——
+        # 已写章与新大纲的比对走 parse_written_results（chapter-deltas），不走章纲
+        title_line = m.group(0).splitlines()[0]
+        if "已写" in title_line:
+            continue
         body = m.group(2)
         entry: dict[str, str] = {}
         for field in ("本章目标", "关键事件", "章末钩子"):

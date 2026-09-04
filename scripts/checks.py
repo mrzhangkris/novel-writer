@@ -48,12 +48,20 @@ META_MARKDOWN_RE = re.compile(
 )
 
 
-def _has_common_substring(a: str, b: str, min_len: int) -> bool:
-    """判断 a 与 b 是否存在连续 min_len 字相同的子串。"""
+def _find_common_substring(a: str, b: str, min_len: int) -> str | None:
+    """返回 a 与 b 之间第一条连续 min_len 字相同的子串（用于报错定位），无则 None。"""
     if len(a) < min_len or len(b) < min_len:
-        return False
+        return None
     substrings = {a[i : i + min_len] for i in range(len(a) - min_len + 1)}
-    return any(b[i : i + min_len] in substrings for i in range(len(b) - min_len + 1))
+    for i in range(len(b) - min_len + 1):
+        sub = b[i : i + min_len]
+        if sub in substrings:
+            return sub
+    return None
+
+
+def _has_common_substring(a: str, b: str, min_len: int) -> bool:
+    return _find_common_substring(a, b, min_len) is not None
 
 
 
@@ -197,9 +205,11 @@ def cmd_cross_chapter(body: Path, prev_body: Path | None) -> int:
         return 0
     cur_head = body.read_text(encoding="utf-8")[:CROSS_CHAPTER_WINDOW]
     prev_tail = prev_body.read_text(encoding="utf-8")[-CROSS_CHAPTER_WINDOW:]
-    if _has_common_substring(prev_tail, cur_head, CROSS_CHAPTER_MIN_MATCH):
+    dup = _find_common_substring(prev_tail, cur_head, CROSS_CHAPTER_MIN_MATCH)
+    if dup:
         print(
-            f"❌ 跨章衔接重复：本章开头与上一章结尾存在连续 ≥{CROSS_CHAPTER_MIN_MATCH} 字相同的句子"
+            f"❌ 跨章衔接重复：本章开头与上一章结尾存在连续 ≥{CROSS_CHAPTER_MIN_MATCH} 字相同的句子："
+            f"「{dup}」——改写本章开头（或上一章结尾），保留信息更换措辞"
         )
         return 1
     print("✅ 跨章衔接通过（无重复）")
