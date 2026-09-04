@@ -490,6 +490,8 @@ def assemble(root: Path, chapter: int) -> str:
 
     # 风格指令
     st = section("风格指令")
+    if section_empty(st) and (not style or all("style-anchor" in l or "空" in l for l in style)):
+        style.insert(0, "- ⚠️ 文风锚为空模板：本书暂无文风约束，AI 生成易滑向单一腔调。建议尽快回填 .novel/style-anchor.md（腔调 3 词 + 样板段落）")
     if section_empty(st):
         style += playbook_reminders(root)
         replace_section("风格指令", "\n".join(style) + "\n")

@@ -260,6 +260,10 @@ def finish(root: Path, chapter: int, coldread: str | None) -> int:
         if rc != 0:
             return rc
     print(f"  ✅ 第 {chapter} 章闭环完成。下一章：chapter_flow.py prepare --project {root}")
+    # 文风锚校准提醒（第 3 章后触发一次：量化基线应已可实测）
+    anchor = root.parent / ".novel" / "style-anchor.md"
+    if anchor.exists() and "___" in anchor.read_text(encoding="utf-8"):
+        print("  💡 文风锚量化基线仍是空模板：已写 3 章，建议实测句长/对话占比回填 style-anchor.md（防后续文风漂移无约束）")
     print("  💡 本章有妙处/坑？learn.py add --scope project/author 沉淀一条；全书完跑 book_finish.py --project 收尾")
     return 0
 
