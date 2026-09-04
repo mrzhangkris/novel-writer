@@ -243,6 +243,9 @@ def check_project(project: Path) -> dict[str, Any]:
     raw_state = read_json(state_path(project))
     if isinstance(raw_state, dict) and "overrides" not in raw_state:
         write_if_changed(tracking / "overrides.md", expected_views["overrides.md"])
+    # v5 迁移：ledger.md（道具/秘密/誓约台账视图）是新增派生视图，首次 check 补写，不报缺失。
+    if not (tracking / "ledger.md").exists():
+        write_if_changed(tracking / "ledger.md", expected_views["ledger.md"])
     for relative, expected in expected_views.items():
         path = tracking / relative
         require(path.exists(), f"derived view is missing: {relative}")

@@ -27,7 +27,8 @@ def parse_outline_entries(outline: str) -> dict[int, dict[str, str]]:
     """解析 outline.md 每章条目：章号 -> {本章目标, 关键事件}。"""
     entries: dict[int, dict[str, str]] = {}
     for m in re.finditer(
-        r"第\s*(\d+)\s*章[^\n]*\n(.*?)(?=\n第\s*\d+\s*章|\Z)",
+        # 锚定行首（可带 ### 标题前缀）：防止总纲表格里的「第 3 章末」被误当章条目
+        r"(?m)^(?:#{2,4}\s*)?第\s*(\d+)\s*章[^\n]*\n(.*?)(?=\n(?:#{2,4}\s*)?第\s*\d+\s*章|\Z)",
         outline,
         flags=re.DOTALL,
     ):
@@ -69,8 +70,19 @@ def parse_foreshadow_state(root: Path) -> dict[str, dict]:
 
 
 def foreshadow_in_outline(fid: str, outline: str) -> bool:
-    """伏笔 id 是否仍出现在新大纲里（F1/F2 编号或回收章标注）。"""
-    return fid in outline
+    """伏笔 id 是否仍出现在新大纲里。编号归一化比对：
+    账本 F002 vs 大纲 F2 是同一伏笔（int 相等即命中），防格式差异假阳性。"""
+    m = re.fullmatch(r"F(\d+)", fid)
+    if not m:
+        return fid in outline
+    num = int(m.group(1))
+    if f"F{num:03d}" in outline or f"F{num}" in outline:
+        return True
+    # 大纲伏笔表格式「| F2 |」/「F2：」按编号token比对
+    return any(
+        re.fullmatch(rf"F{num:03d}|F{num}", tok)
+        for tok in re.findall(r"F\d+", outline)
+    )
 
 
 def detect_conflicts(root: Path, from_chapter: int) -> list[str]:

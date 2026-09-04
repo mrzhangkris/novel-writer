@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -78,7 +79,7 @@ def plan(root: Path) -> list[str]:
         return out
     if steps.get("draft") != "done":
         out.append(f"1) 生成并填事务：{SK}/gen_transaction.py commit --project {ROOT}")
-        out.append("   填 tx（result≤360B、constraints 只收字符串、快照=changes 角色、退役逐字）")
+        out.append("   填 tx（result≤480B、constraints 只收字符串、快照=changes 角色、退役逐字）")
         out.append(f"   提交：{SK}/tracking_commit.py commit --project {ROOT} --input .story/tx-chapter-{chapter:03d}.json")
         out.append(f"2) 闸门：{SK}/pipeline.py advance draft（字数/去AI味/衔接/履约/风格基线/说教密度/章节定位）")
         out.append(f"3) 冷读：{SK}/coldread_material.py --chapter {chapter} --write-review → spawn 子代理读 draft+review.md 评分（四维 + 红线标签 6 项）")
@@ -207,11 +208,10 @@ def finish(root: Path, chapter: int, coldread: str | None) -> int:
         print("  子代理把四维分数落进 review.md 后，直接重跑 finish（自动解析分数），")
         print(f"  或显式传分：chapter_flow.py finish --project {root} --coldread 翻页分,认知分,共情分,节奏分")
         return 0
-    # 冷读段：趋势 → 打回判定 → 先审稿（archive 冻结前）→ revise → archive → 下一章
+    # 冷读段：先校验分数 → 打回判定 → 落 review.md → 趋势 → 审稿 → revise/archive → 下一章
+    # 顺序纪律：非法分数绝不落盘（防坏分污染 review.md 后 _verify_review_integrity 恒拒）；
+    # 结论与实际一致：≤2 分打回时落盘的结论写「打回」，不写「通过」。
     print(f"  🧊 冷读分数：{coldread}")
-    rc = run("quality_trend.py", "record", "--project", str(root), "--scores", coldread, cwd=root)
-    if rc != 0:
-        return rc
     try:
         parts = [int(x) for x in coldread.split(",")]
         if len(parts) != 4:
@@ -219,9 +219,23 @@ def finish(root: Path, chapter: int, coldread: str | None) -> int:
     except ValueError:
         print(f"  ❌ 冷读分数格式错误：「{coldread}」应为四个 1-5 整数（翻页欲,认知负荷,共情验证,节奏感受）")
         return 1
-    if any(p <= 2 for p in parts):
+    if any(not (1 <= p <= 5) for p in parts):
+        print(f"  ❌ 冷读分数越界（须 1-5）：{coldread}")
+        return 1
+    rejected = any(p <= 2 for p in parts)
+    review_path = root / f"chapters/chapter-{chapter:03d}/review.md"
+    if review_path.exists() and not re.search(r"评分：\s*\d", review_path.read_text(encoding="utf-8")):
+        # 分数同步落 review.md：skip revise 校验 review.md 有真实评分行，
+        # 只记 trend 不落 review 会导致「下一章闭环在 skip 处死锁」。
+        verdict = "打回（有维度 ≤2 分）" if rejected else "通过（无 ≤2 分，分数由 finish --coldread 落盘）"
+        with review_path.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n评分：{coldread}\n结论：{verdict}\n")
+    if rejected:
         print("  ❌ 冷读有维度 ≤2 分：本章打回。按 novel-revise 改 draft（打回原因见 review.md），改完重跑 finish 一段")
         return 1
+    rc = run("quality_trend.py", "record", "--project", str(root), "--scores", coldread, cwd=root)
+    if rc != 0:
+        return rc
     # 审稿与连续性检查放在归档之前（先处理再归档，归档即冻结）
     rc = run("platform_review.py", "--chapter", str(chapter), "--strict", "--project", str(root), cwd=root)
     if rc != 0:

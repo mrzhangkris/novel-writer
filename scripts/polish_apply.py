@@ -31,11 +31,16 @@ def load_pairs_txt(path: Path) -> list[tuple[int | None, str, str]]:
     current_chapter: int | None = None
     for line in path.read_text(encoding="utf-8").splitlines():
         s = line.strip()
-        if not s or s.startswith("#"):
+        if not s:
             continue
-        if s.startswith("## ") or s.startswith("# 第") and "章" in s:
+        # 章号标注行（「# 第N章」/「## 第N章」）先解析再跳过——
+        # 历史 bug：startswith("#") 整行跳过导致章号解析分支永不可达
+        if s.startswith("#") and "章" in s:
             m = re.search(r"第(\d+)章", s)
-            current_chapter = int(m.group(1)) if m else current_chapter
+            if m:
+                current_chapter = int(m.group(1))
+            continue
+        if s.startswith("#"):
             continue
         m = PAIR_RE.match(s)
         if m:

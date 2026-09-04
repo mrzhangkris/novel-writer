@@ -10,8 +10,8 @@ import re
 import unicodedata
 from typing import Any
 
-INPUT_SCHEMA_VERSION = 1
-TRACKING_SCHEMA_VERSION = 4
+INPUT_SCHEMA_VERSION = 2  # v1 事务（无 items/secrets/pledges/plot_points）仍被接受
+TRACKING_SCHEMA_VERSION = 5  # v5：+items/secrets/pledges 维度、snapshot.alive、context.active_scene；v4 账本缺省键按空处理
 DELTA_TARGET_BYTES = 1536
 DELTA_MAX_BYTES = 3072
 CONTEXT_TARGET_BYTES = 8192
@@ -235,12 +235,18 @@ def normalize_snapshot(value: object, label: str) -> dict[str, Any]:
             "location",
             "goal",
             "state",
+            "alive",
             "abilities_resources",
             "relationships",
             "knowledge",
             "open_threads",
         },
         label,
+    )
+    alive_raw = snapshot.get("alive", True)
+    require(
+        isinstance(alive_raw, bool),
+        f"{label}.alive must be a boolean (角色是否在世；死亡即写 false)",
     )
     return {
         "identity": clean_text(
@@ -251,6 +257,7 @@ def normalize_snapshot(value: object, label: str) -> dict[str, Any]:
         ),
         "goal": clean_text(snapshot.get("goal"), f"{label}.goal", max_bytes=300),
         "state": clean_text(snapshot.get("state"), f"{label}.state", max_bytes=300),
+        "alive": alive_raw,
         "abilities_resources": clean_string_list(
             snapshot.get("abilities_resources", []), f"{label}.abilities_resources"
         ),
@@ -562,12 +569,19 @@ def validate_context_input(
         "active_character_names",
         "continuity_risks",
         "thread",
+        "active_scene",
     }
     if include_initial_fields:
         allowed.update({"recent_chapters", "next_chapter_commitments"})
     require_known_keys(context, allowed, "context")
     normalized: dict[str, Any] = {
         "position": validate_position(context.get("position")),
+        "active_scene": clean_text(
+            context.get("active_scene", ""),
+            "context.active_scene",
+            allow_empty=True,
+            max_bytes=240,
+        ),
         "long_term_constraints": clean_string_list(
             context.get("long_term_constraints", []),
             "context.long_term_constraints",
@@ -630,6 +644,92 @@ def validate_context_input(
         )
     return normalized
 
+LEDGER_CHANGE_ACTIONS = ("upsert", "delete")
+
+
+def normalize_ledger_change(
+    value: object,
+    label: str,
+    fields: dict[str, type],
+    *,
+    allow_delete: bool,
+) -> dict[str, Any]:
+    """items/secrets/pledges 三类台账变更的通用归一化：按名 upsert/delete。
+
+    fields 声明额外字段及类型：str 必填、bool/int 可选（bool 缺省 False、int 缺省 None）。"""
+    row = as_mapping(value, label)
+    allowed = {"action", "name", *fields}
+    require_known_keys(row, allowed, label)
+    action = clean_text(row.get("action", "upsert"), f"{label}.action", max_bytes=24)
+    require(
+        action in (LEDGER_CHANGE_ACTIONS if allow_delete else ("upsert",)),
+        f"{label}.action is invalid",
+    )
+    name = safe_file_component(row.get("name"), f"{label}.name")
+    if action == "delete":
+        return {"action": action, "name": name}
+    result: dict[str, Any] = {"action": action, "name": name}
+    for field, field_type in fields.items():
+        if field_type is bool:
+            raw = row.get(field, False)
+            require(
+                isinstance(raw, bool), f"{label}.{field} must be a boolean"
+            )
+            result[field] = raw
+        elif field_type is int:
+            raw = row.get(field)
+            result[field] = (
+                None
+                if raw is None
+                else as_int(raw, f"{label}.{field}", minimum=1)
+            )
+        else:
+            result[field] = clean_text(
+                row.get(field), f"{label}.{field}", max_bytes=360
+            )
+    return result
+
+
+def normalize_ledger_state(
+    value: object,
+    label: str,
+    fields: dict[str, type],
+    last_chapter: int,
+) -> dict[str, dict[str, Any]]:
+    rows = as_mapping(value, label)
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw_name, raw_row in rows.items():
+        row = as_mapping(raw_row, f"{label}.{raw_name}")
+        require_known_keys(row, {"name", "updated_chapter", *fields}, f"{label}.{raw_name}")
+        require(
+            row.get("name") == raw_name,
+            f"{label}.{raw_name}.name does not match its key",
+        )
+        change = normalize_ledger_change(
+            {"action": "upsert", **{k: v for k, v in row.items() if k != "updated_chapter"}},
+            f"{label}.{raw_name}",
+            fields,
+            allow_delete=False,
+        )
+        change.pop("action")
+        updated = as_int(
+            row.get("updated_chapter"), f"{label}.{raw_name}.updated_chapter", minimum=1
+        )
+        require(
+            updated <= last_chapter,
+            f"{raw_name} updates after current chapter ({label})",
+        )
+        change["updated_chapter"] = updated
+        normalized[change["name"]] = change
+    return normalized
+
+
+# 三类台账的字段契约：道具（持有者）/秘密（知情者+是否揭示）/誓约（兑现章+状态）
+ITEM_FIELDS: dict[str, type] = {"holder": str, "note": str}
+SECRET_FIELDS: dict[str, type] = {"known_by": str, "revealed": bool}
+PLEDGE_FIELDS: dict[str, type] = {"due_chapter": int, "status": str}
+PLEDGE_STATUSES = ("未兑现", "已兑现", "已破誓")
+
 def normalize_rule_override(
     value: object, label: str, *, through_chapter: int
 ) -> dict[str, Any]:
@@ -684,6 +784,10 @@ def normalize_delta(
             "character_changes",
             "foreshadow_changes",
             "timeline_events",
+            "plot_points",
+            "items",
+            "secrets",
+            "pledges",
             "constraints",
             "next_chapter_commitments",
             "retired_context_items",
@@ -778,6 +882,43 @@ def normalize_delta(
         maximum=12,
         item_max_bytes=120,
     )
+    plot_points = clean_string_list(
+        delta.get("plot_points", []),
+        "delta.plot_points",
+        maximum=8,
+        item_max_bytes=200,
+    )
+    ledger_changes: dict[str, list[dict[str, Any]]] = {}
+    for key, fields in (
+        ("items", ITEM_FIELDS),
+        ("secrets", SECRET_FIELDS),
+        ("pledges", PLEDGE_FIELDS),
+    ):
+        ledger_changes[key] = [
+            normalize_ledger_change(
+                raw,
+                f"delta.{key}[{index}]",
+                fields,
+                allow_delete=True,
+            )
+            for index, raw in enumerate(as_list(delta.get(key, []), f"delta.{key}"))
+        ]
+        require(
+            len({item["name"] for item in ledger_changes[key]}) == len(ledger_changes[key]),
+            f"delta.{key} contains duplicate names",
+        )
+    pledges = ledger_changes["pledges"]
+    require(
+        len(pledges) <= 5,
+        "delta.pledges may contain at most 5 items per chapter",
+    )
+    for change in pledges:
+        if change["action"] == "delete":
+            continue
+        require(
+            change.get("status") in PLEDGE_STATUSES,
+            f"delta.pledges[{change['name']}].status must be one of {PLEDGE_STATUSES}",
+        )
     rule_overrides = [
         normalize_rule_override(
             raw,
@@ -797,6 +938,10 @@ def normalize_delta(
         "character_changes": character_changes,
         "foreshadow_changes": foreshadow_changes,
         "timeline_events": timeline_events,
+        "plot_points": plot_points,
+        "items": ledger_changes["items"],
+        "secrets": ledger_changes["secrets"],
+        "pledges": pledges,
         "constraints": clean_string_list(
             delta.get("constraints", []), "delta.constraints", maximum=6
         ),
@@ -829,13 +974,16 @@ def normalize_state(document: object) -> dict[str, Any]:
             "characters",
             "foreshadow",
             "timeline",
+            "items",
+            "secrets",
+            "pledges",
             "overrides",
             "threads",
         },
         "tracking state",
     )
     require(
-        root.get("schema_version") == TRACKING_SCHEMA_VERSION,
+        root.get("schema_version") in (4, TRACKING_SCHEMA_VERSION),
         "tracking state schema is unsupported",
     )
     last_chapter = as_int(
@@ -875,6 +1023,15 @@ def normalize_state(document: object) -> dict[str, Any]:
         )
     foreshadow = normalize_foreshadow_state(root.get("foreshadow", {}), last_chapter)
     timeline = normalize_timeline_state(root.get("timeline", {}), last_chapter)
+    items = normalize_ledger_state(
+        root.get("items", {}), "tracking state.items", ITEM_FIELDS, last_chapter
+    )
+    secrets = normalize_ledger_state(
+        root.get("secrets", {}), "tracking state.secrets", SECRET_FIELDS, last_chapter
+    )
+    pledges = normalize_ledger_state(
+        root.get("pledges", {}), "tracking state.pledges", PLEDGE_FIELDS, last_chapter
+    )
     overrides = normalize_overrides_state(root.get("overrides", []), last_chapter)
     if last_chapter == 0:
         require(
@@ -900,6 +1057,9 @@ def normalize_state(document: object) -> dict[str, Any]:
         "characters": characters,
         "foreshadow": foreshadow,
         "timeline": timeline,
+        "items": items,
+        "secrets": secrets,
+        "pledges": pledges,
         "overrides": overrides,
         "threads": validate_threads(root.get("threads", {})),
     }
@@ -921,8 +1081,9 @@ def normalize_initial_document(document: object) -> dict[str, Any]:
         "init input",
     )
     require(
-        root.get("schema_version") == INPUT_SCHEMA_VERSION,
-        "init input schema_version is unsupported",
+        isinstance(root.get("schema_version"), int)
+        and root.get("schema_version") in (1, INPUT_SCHEMA_VERSION),
+        "init input schema_version is unsupported (accept 1 or 2)",
     )
     last_chapter = as_int(root.get("last_chapter"), "last_chapter")
     context = validate_context_input(root.get("context"), include_initial_fields=True)
@@ -991,8 +1152,9 @@ def normalize_transaction(state: dict[str, Any], document: object) -> dict[str, 
         "transaction",
     )
     require(
-        root.get("schema_version") == INPUT_SCHEMA_VERSION,
-        "transaction schema_version is unsupported",
+        isinstance(root.get("schema_version"), int)
+        and root.get("schema_version") in (1, INPUT_SCHEMA_VERSION),
+        "transaction schema_version is unsupported (accept 1 or 2)",
     )
     mode = clean_text(root.get("mode"), "mode", max_bytes=24)
     require(mode in {"append", "revision"}, "mode must be append or revision")

@@ -5,6 +5,14 @@
 # （spec 履约清单 + 事务 + 全部闸门 + 冷读趋势 + 归档 + 模式沉淀）→
 # 导出成书 → 账本终检。任何一步失败即退出非零。
 #
+# 另覆盖六个新机制：
+#   1. ledger.md 派生视图（items/secrets/pledges 提交后落视图 + check 自动补写 + 篡改拒收）
+#   2. 誓约/秘密检测（check_continuity 报 pledge-overdue / secret-invariant）
+#   3. 死亡铁律（死者移动/无宣告/软词拒收，硬词放行，复活须登记）
+#   4. 选角出场检查（失约拦截 / 全员未出现降 warning / 旧 spec 跳过）
+#   5. writing-rules.json 双投影（spec 规则注入 + 写后 check 真实执行）
+#   6. check_seam.py 跨章拼接（延续通过 / 突变告警 / 退出码恒 0）
+#
 # 用法：bash {SKILL_DIR}/tests/run_regression.sh
 # 依赖：python3、node（去AI味检测用）。改动任何脚本后跑一遍。
 
@@ -337,7 +345,7 @@ draft = "\n\n".join([
 "陆川站在原地，看着他的背影消失在街口。东边的天，透出了一线白。",
 "他低头看了一眼手机。凌晨五点。再过一会儿，整条旧街就要醒过来了。",
 "陆川收起那张全景照片，往自己店里走。卷帘门上的便签纸已经被风吹掉了，只剩一点胶痕。",
-"他没有再贴新的。有些话，不用贴在门上。",
+"他没有再贴新的。回到店里，他把那半张纸压在柜台玻璃下。有些话，不用贴在门上。",
 "六点整，旧街的第一盏灯亮了。是马婶的卤味摊。",
 "接着是第二盏，第三盏。卖早点的，开杂货的，修鞋的，一家一家把卷帘门拉起来。",
 "陆川站在自家店门口，把招牌擦了一遍，又擦了一遍。",
@@ -364,6 +372,17 @@ tx["delta"]["foreshadow_changes"] = [
 tx["delta"]["rule_overrides"] = [
   {"rule": "禁止：此世界无超自然力量", "reason": "回归测试：验证设定演进账本登记", "effective_chapter": 2, "payback": "无实际打破，仅测试登记"}
 ]
+# 台账事务（ledger.md 派生视图数据源）：誓约限期第1章（第2章已逾期）、
+# 一个合规秘密、一件道具（违规秘密 known_by 为空会被 G1 入口拒收，单独验证见下）。
+tx["delta"]["items"] = [
+  {"action": "upsert", "name": "旧街全景照片", "holder": "陆川", "note": "周四海随身三年"}
+]
+tx["delta"]["secrets"] = [
+  {"action": "upsert", "name": "还债三年经历", "revealed": True, "known_by": "陆川"}
+]
+tx["delta"]["pledges"] = [
+  {"action": "upsert", "name": "替周四海转告街坊", "due_chapter": 1, "status": "未兑现"}
+]
 tx["context"]["active_character_names"] = names
 tx["character_snapshots"] = {
   names[0]: {"identity": "旧街杂货店老板", "location": "旧街", "goal": "转告街坊", "state": "释然",
@@ -374,14 +393,232 @@ json.dump(tx, open(".story/tx-chapter-002.json", "w", encoding="utf-8"), ensure_
 PY
 python3 "$SKILL_DIR/scripts/tracking_commit.py" commit --project . --input .story/tx-chapter-002.json >/dev/null || fail "commit 2"
 python3 "$SKILL_DIR/scripts/pipeline.py" advance draft >/dev/null || fail "advance draft 2"
+python3 "$SKILL_DIR/scripts/coldread_material.py" --chapter 2 --write-review >/dev/null || fail "coldread 2"
 printf '评分：4,4,4,4\n' >> chapters/chapter-002/review.md
 python3 "$SKILL_DIR/scripts/pipeline.py" skip revise >/dev/null || fail "skip revise 2"
 python3 "$SKILL_DIR/scripts/pipeline.py" advance archive >/dev/null || fail "advance archive 2"
 grep -q "第2章" tracking/overrides.md || fail "overrides.md 登记"
 pass "第 2 章闭环 + override 账本"
 
+# ================ 新机制回归 1：ledger.md 派生视图 ================
+# 含 items/secrets/pledges 的事务提交后，tracking/ledger.md 应出现且与账本一致
+# （一致性由终检 check 的视图 diff 兜底，这里先断言视图内容）。
+test -f tracking/ledger.md || fail "ledger.md 未生成"
+grep -q "## 道具（name | 持有者 | 备注）" tracking/ledger.md || fail "ledger.md 缺道具节"
+grep -q "旧街全景照片｜陆川" tracking/ledger.md || fail "ledger.md 道具条目不符"
+grep -q "还债三年经历｜陆川｜已揭示" tracking/ledger.md || fail "ledger.md 秘密条目不符"
+grep -q "替周四海转告街坊｜第1章前｜未兑现" tracking/ledger.md || fail "ledger.md 誓约条目不符"
+pass "ledger.md 派生视图（道具/秘密/誓约）"
+
+# ================ 新机制回归 2：誓约/秘密检测 ================
+# 誓约 status=未兑现 且 due_chapter(1) < 当前章(2) → check_continuity 报 pledge-overdue；
+# 合规秘密（known_by 非空）不得误报。
+python3 "$SKILL_DIR/scripts/check_continuity.py" --project . > "$WORK/continuity.txt" 2>&1 || fail "check_continuity 应退出 0（advisory）"
+grep -q "pledge-overdue" "$WORK/continuity.txt" || fail "未报 pledge-overdue"
+grep -q "替周四海转告街坊" "$WORK/continuity.txt" || fail "pledge-overdue 未指名誓约"
+if grep -q "还债三年经历" "$WORK/continuity.txt"; then fail "合规秘密（known_by 非空）被误报 invariant"; fi
+pass "誓约逾期检测 + 合规秘密不误报"
+
+# 违规秘密（revealed=true 且 known_by 空）应被账本 schema 入口拒收（fail-closed）。
+# 断言报错含「known_by must not be empty」——证明拒绝的是不变式而非 JSON 语法，
+# 且被拒事务不得污染 state。
+python3 - <<PY
+import json
+st = json.load(open("tracking/_tracking-state.json", encoding="utf-8"))
+base = json.load(open(".story/tx-archive/tx-chapter-002.json", encoding="utf-8"))
+base["mode"] = "append"
+base["chapter"] = 3
+base["expected_state_revision"] = st["state_revision"]
+base["delta"]["character_changes"] = []
+base["delta"]["secrets"] = [{"action": "upsert", "name": "安置费来源", "revealed": True, "known_by": ""}]
+base["delta"]["pledges"] = []
+base["delta"]["items"] = []
+base["delta"]["rule_overrides"] = []
+base["delta"]["foreshadow_changes"] = []
+base["character_snapshots"] = {}
+json.dump(base, open(".story/tx-secret-bad.json", "w", encoding="utf-8"), ensure_ascii=False)
+PY
+python3 "$SKILL_DIR/scripts/tracking_commit.py" commit --project . --input .story/tx-secret-bad.json > "$WORK/secret-bad.txt" 2>&1 && fail "违规秘密（revealed 且 known_by 空）未被 schema 拒收"
+grep -q "known_by must not be empty" "$WORK/secret-bad.txt" || fail "拒收原因不是 known_by 不变式"
+if grep -q "安置费来源" tracking/_tracking-state.json; then fail "被拒事务污染了 state"; fi
+rm -f .story/tx-secret-bad.json
+pass "违规秘密 schema 入口拒收（不变式 fail-closed）"
+
+# 存量旧数据/手改账本兜底：state 里出现 revealed=true 且 known_by 空 → secret-invariant
+cp tracking/_tracking-state.json "$WORK/state.bak"
+python3 - <<'PY'
+import json
+p = "tracking/_tracking-state.json"
+st = json.load(open(p, encoding="utf-8"))
+st["secrets"]["安置费来源"] = {"name": "安置费来源", "known_by": "", "revealed": True, "updated_chapter": 2}
+json.dump(st, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2, sort_keys=True)
+PY
+python3 "$SKILL_DIR/scripts/check_continuity.py" --project . > "$WORK/continuity-secret.txt" 2>&1 || fail "check_continuity 应退出 0"
+grep -q "secret-invariant" "$WORK/continuity-secret.txt" || fail "未报 secret-invariant"
+grep -q "安置费来源" "$WORK/continuity-secret.txt" || fail "secret-invariant 未指名秘密"
+mv "$WORK/state.bak" tracking/_tracking-state.json
+pass "秘密不变式检测（存量坏数据兜底）"
+
+# ================ 新机制回归 3：死亡铁律（内联合并层，精确构造事务） ================
+python3 - <<PY
+import sys
+sys.path.insert(0, "$SKILL_DIR/scripts")
+from _tracking.merge import _require_alive_discipline
+from _tracking.schema import TrackingError
+
+def snap(alive, location="旧街"):
+    return {"identity": "旧街工人", "location": location, "goal": "g", "state": "s",
+            "abilities_resources": [], "relationships": [], "knowledge": [],
+            "open_threads": [], "alive": alive}
+
+def tx(change, snapshot, overrides=None):
+    return {"delta": {"character_changes": [{"name": "王铁柱", "change": change}],
+                      "rule_overrides": overrides or []},
+            "snapshots": {"王铁柱": snapshot}}
+
+def expect_reject(tag, state, transaction, keyword):
+    try:
+        _require_alive_discipline(state, transaction)
+    except TrackingError as e:
+        assert keyword in str(e), f"{tag}: 报错缺关键字「{keyword}」：{e}"
+        return
+    raise AssertionError(f"{tag}: 应拒收却放行")
+
+def expect_accept(tag, state, transaction):
+    _require_alive_discipline(state, transaction)
+
+alive_state = {"characters": {"王铁柱": snap(True)}}
+dead_state = {"characters": {"王铁柱": snap(False)}}
+# 1 已死者 location 变化 → 拒收（死者 location 冻结）
+expect_reject("死者移动", dead_state,
+              tx("王铁柱的遗体被运往县城", snap(False, location="县城医院")), "不得移动")
+# 2 alive 置 false 无硬词死亡宣告 → 拒收
+expect_reject("无宣告死亡", alive_state, tx("王铁柱伤重", snap(False)), "死亡宣告")
+# 3 软词「昏厥」不算宣告 → 拒收（宁缺毋滥不猜死活）
+expect_reject("软词昏厥", alive_state, tx("王铁柱昏厥倒地", snap(False)), "死亡宣告")
+# 4 硬词「身亡」邻近共现 → 放行
+expect_accept("硬词身亡", alive_state, tx("王铁柱当场身亡", snap(False)))
+# 4.5 硬词+软词同窗（「死了——其实是假死」）→ 拒收：验证 death-lexicon.json 真被加载
+# 若 JSON 加载失败降级内置词表（soft 空），此用例必失败——防词表路径 bug 漏网
+from _tracking.merge import LEXICON
+assert LEXICON["soft"], "death-lexicon.json 未加载（soft 词表为空）——检查 merge.py 词表路径"
+expect_reject("硬词+软词同窗", alive_state, tx("王铁柱死了——其实是假死", snap(False)), "死亡宣告")
+# 5 复活无 rule_overrides → 拒收
+expect_reject("复活无登记", dead_state, tx("王铁柱醒了过来", snap(True)), "复活")
+# 6 复活同章 rule_overrides 登记 → 放行
+expect_accept("复活已登记", dead_state,
+              tx("王铁柱醒了过来", snap(True),
+                 overrides=[{"rule": "死者不可复生", "reason": "回归测试", "effective_chapter": 3, "payback": "p"}]))
+print("死亡铁律 7 场景全部符合预期")
+PY
+pass "死亡铁律（移动/无宣告/软词/硬词/软词闸/复活）"
+
+# ================ 新机制回归 4：选角出场检查 ================
+# 回归书故意写短章，此时 soft_short_streak 已达 2——第 3 次 checks draft 会触发趋势拦截。
+# 选角测试与字数无关，先把趋势计数清零（定向测试操作）。
+python3 -c "import json; from pathlib import Path; p = Path('.story/pipeline.json'); d = json.loads(p.read_text()); d['soft_short_streak'] = 0; d['soft_long_streak'] = 0; p.write_text(json.dumps(d, ensure_ascii=False, indent=2))"
+# 第 2 章 spec 当前无「出场角色」节（旧模板形态）：基线 checks draft 应绿。
+rc=0; python3 "$SKILL_DIR/scripts/checks.py" draft > "$WORK/cast-baseline.txt" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || { cat "$WORK/cast-baseline.txt"; fail "选角基线：checks draft 应通过"; }
+# 失约拦截：3 人计划、正文只出现 1 人（陆川），缺席 2 ≥ max(2, ⌈2·3/3⌉) → 拦截
+cat >> chapters/chapter-002/spec.md <<'EOF'
+## 出场角色
+- 陆川
+- 王铁柱
+- 李铁柱
+EOF
+rc=0; python3 "$SKILL_DIR/scripts/checks.py" draft > "$WORK/cast-missing.txt" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || { cat "$WORK/cast-missing.txt"; fail "选角失约应 return 1"; }
+grep -q "选角失约" "$WORK/cast-missing.txt" || fail "未报「选角失约」"
+grep -q "王铁柱" "$WORK/cast-missing.txt" && grep -q "李铁柱" "$WORK/cast-missing.txt" || fail "失约名单缺人"
+# 全员 0 次出现 → 降级 warning 不拦（第一人称/代词化叙事兜底）
+python3 - <<'PY'
+from pathlib import Path
+p = Path("chapters/chapter-002/spec.md")
+t = p.read_text(encoding="utf-8")
+t = t.replace("## 出场角色\n- 陆川\n- 王铁柱\n- 李铁柱\n", "## 出场角色\n- 王铁柱\n- 李铁柱\n- 赵铁柱\n")
+p.write_text(t, encoding="utf-8")
+PY
+rc=0; python3 "$SKILL_DIR/scripts/checks.py" draft > "$WORK/cast-all-missing.txt" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || { cat "$WORK/cast-all-missing.txt"; fail "全员未出现应只 warning 不拦"; }
+grep -q "全部未按名出现" "$WORK/cast-all-missing.txt" || fail "未报全员未出现 warning"
+# 旧版 spec（无「出场角色」节）→ 跳过；删节即还原基线状态
+python3 - <<'PY'
+import re
+from pathlib import Path
+p = Path("chapters/chapter-002/spec.md")
+t = p.read_text(encoding="utf-8")
+t = re.sub(r"## 出场角色[^\n]*\n(.*?)(?=\n## |\Z)", "", t, flags=re.S)
+p.write_text(t, encoding="utf-8")
+PY
+rc=0; python3 "$SKILL_DIR/scripts/checks.py" draft > "$WORK/cast-legacy.txt" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || { cat "$WORK/cast-legacy.txt"; fail "旧 spec 无出场角色节应跳过不拦"; }
+grep -q "旧版模板" "$WORK/cast-legacy.txt" || fail "旧 spec 未提示跳过"
+pass "选角出场检查（失约拦截/warning 降级/旧 spec 跳过）"
+
+# ================ 新机制回归 5：writing-rules.json 双投影 ================
+# 写前投影：assemble_spec 后第 1 章 spec 有「规则注入」节，core 全注入；
+# 非「番茄」平台的 standard 规则（起点推进）被过滤，匹配的（番茄节奏）注入。
+grep -q "## 规则注入" chapters/chapter-001/spec.md || fail "spec 缺「规则注入」节"
+grep -q "红线·转折连接词密度" chapters/chapter-001/spec.md || fail "core 转折词规则未注入"
+grep -q "红线·章内净变化" chapters/chapter-001/spec.md || fail "core 净变化规则未注入"
+grep -q "标准·番茄节奏" chapters/chapter-001/spec.md || fail "平台匹配的 standard 规则未注入"
+if grep -q "起点推进" chapters/chapter-001/spec.md; then fail "非当前平台的 standard 规则未被过滤"; fi
+# 写后投影：cmd_writing_rules 对含 check 字段的规则真实执行——
+# 转折词密度超 block(8) 拦截返回 1；干净正文返回 0。
+python3 - <<PY
+import sys
+sys.path.insert(0, "$SKILL_DIR/scripts")
+from pathlib import Path
+from checks import cmd_writing_rules
+
+root = Path(".").resolve()
+clean = root / "chapters/chapter-002/draft.md"
+assert cmd_writing_rules(root, clean) == 0, "干净正文被 writing-rules 误拦"
+
+noisy = root / ".story" / "regression-transition.txt"
+noisy.write_text("然而他没有退。但是他记得那笔账。不过旧街的灯还亮着。却没有人应门。" * 3, encoding="utf-8")
+try:
+    rc = cmd_writing_rules(root, noisy)
+    assert rc == 1, f"转折词超 block 应拦截（rc={rc}）"
+finally:
+    noisy.unlink()
+print("writing-rules 双投影：写前注入 + 写后拦截均生效")
+PY
+pass "writing-rules.json 双投影（规则注入 + 写后执行）"
+
+# ================ 新机制回归 6：check_seam.py 跨章拼接 ================
+# 延续（第1→2章同一场景线）→ 无 seam-conflict；退出码恒 0（advisory）。
+python3 "$SKILL_DIR/scripts/check_seam.py" --project . --chapter 2 > "$WORK/seam-ok.txt" 2>&1 || fail "check_seam 退出码应恒 0"
+grep -q "seam 通过" "$WORK/seam-ok.txt" || fail "延续场景未通过 seam 对账"
+if grep -q "seam-conflict" "$WORK/seam-ok.txt"; then fail "延续场景误报 seam-conflict"; fi
+# 场景突变：第3章开篇跳到皇宫 → 地点指纹无交集 → seam-conflict warning
+mkdir -p chapters/chapter-003
+cat > chapters/chapter-003/draft.md <<'EOF'
+皇宫的清晨，钟声回荡在太和殿里。
+皇帝坐在大殿深处的龙椅上，面色阴沉，谁也不敢抬头。
+太监总管低着头，一路小跑穿过长长的宫道，去传今日的第一道旨意。
+EOF
+python3 "$SKILL_DIR/scripts/check_seam.py" --project . --chapter 3 > "$WORK/seam-conflict.txt" 2>&1 || fail "check_seam 退出码应恒 0（突变场景）"
+grep -q "seam-conflict" "$WORK/seam-conflict.txt" || fail "场景突变未报 seam-conflict"
+rm -rf chapters/chapter-003
+pass "check_seam 跨章拼接（延续通过/突变告警/退出码恒 0）"
+
 # ---- 终检 ----
+# 旧项目缺 ledger.md（v5 之前的老账本）：首次 check 应自动补写、不报错
+rm -f tracking/ledger.md
+python3 "$SKILL_DIR/scripts/tracking_commit.py" check --project . > "$WORK/check-backfill.txt" 2>&1 || fail "缺 ledger.md 的 check 应自动补写"
+test -f tracking/ledger.md || fail "check 未补写 ledger.md"
+pass "ledger.md 缺失自动补写（旧项目迁移）"
+# 派生视图与账本强一致：手改 ledger.md 后 check 必须拒绝
+cp tracking/ledger.md "$WORK/ledger.bak"
+printf '\n- 手改条目｜某人｜回归测试\n' >> tracking/ledger.md
+rc=0; python3 "$SKILL_DIR/scripts/tracking_commit.py" check --project . > "$WORK/check-tamper.txt" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "篡改 ledger.md 未被 check 拒绝"
+grep -q "derived view differs" "$WORK/check-tamper.txt" || fail "篡改报错缺「derived view differs」"
+mv "$WORK/ledger.bak" tracking/ledger.md
 python3 "$SKILL_DIR/scripts/tracking_commit.py" check --project . >/dev/null || fail "账本终检"
+pass "ledger.md 篡改拒收 + 账本终检"
 python3 "$SKILL_DIR/scripts/export_book.py" --project . --output 成书稿.md >/dev/null || fail "导出"
 python3 "$SKILL_DIR/scripts/pipeline.py" status >/dev/null || fail "status"
 python3 "$SKILL_DIR/scripts/quality_trend.py" show >/dev/null || fail "趋势"
@@ -390,4 +627,6 @@ python3 "$SKILL_DIR/scripts/quality_trend.py" show >/dev/null || fail "趋势"
 bash "$SKILL_DIR/tests/test_deslop_patterns.sh" || fail "deslop 检测器回归"
 
 echo
-echo "🎉 回归测试全部通过：init → outline → 2 章闭环 → override 账本 → 导出 → 终检 → deslop 检测器"
+echo "🎉 回归测试全部通过：init → outline → 2 章闭环 → override 账本 →"
+echo "   ledger 派生视图 → 誓约/秘密检测 → 死亡铁律 → 选角出场 → 规则双投影 → seam 拼接 →"
+echo "   导出 → 终检（含 ledger 补写/篡改拒收）→ deslop 检测器"

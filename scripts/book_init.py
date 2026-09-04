@@ -87,8 +87,9 @@ def match_card(genre: str) -> tuple[str, str] | None:
     for name, fname, aliases, conf in parse_card_index():
         tokens = [name] + [a.strip() for a in aliases.split("/")]
         if g == name or g == fname.removesuffix(".md"):
-            hits.append((name, fname, conf))
-            continue
+            # 精确命中立即返回：不受后续别名子串的宽泛命中污染成多义
+            path = REFERENCES / "genre-prose-cards" / fname
+            return name, str(path)
         for t in tokens:
             if t and (t in g or g in t):
                 hits.append((name, fname, conf))

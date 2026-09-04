@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """checks.py — 确定性校验脚本（字数 / 去AI味 / 一致性）
 
-三种校验：
+校验入口（pipeline 用）：
+  outline     大纲合格（章节条目/伏笔/概念预算/人物卡/盘点）
+  draft       门禁全组（字数/去AI味/跨章/履约/风格基线/说话人/语病/说教/规则库/选角出场/seam）
+  archive     一致性 verify
+
+独立子命令：
   wordcount   CJK 字数，对照 references/word-count.json 的平台×类型范围。
               硬线（70%/130%）拦截；软区（目标线到硬线之间）只警告放行，
               由 pipeline 记录连续计数：连续 3 章落在同一软区 → 升级硬拦截。
@@ -103,7 +108,8 @@ def cmd_wordcount(path: str, platform: str | None, type_: str) -> tuple[int, str
     if not p.exists():
         print(f"❌ 文件不存在：{p}")
         return 1, "none"
-    text = p.read_text(encoding="utf-8")
+    # 剥离 HTML 注释后再计数：<!-- --> 是给 AI 的标注不是读者内容，不剥离则可被用来凑字数
+    text = re.sub(r"<!--.*?-->", "", p.read_text(encoding="utf-8"), flags=re.DOTALL)
     n = count_cjk(text)
 
     root = find_project_root(Path.cwd())
@@ -200,6 +206,32 @@ def cmd_cross_chapter(body: Path, prev_body: Path | None) -> int:
     return 0
 
 
+def cmd_seam(root: Path, chapter: int) -> int:
+    """跨章拼接断裂检测（advisory）：seam 四维指纹（地点/人物/道具/时间）
+    对账前后章交接窗，恒 0 不拦门禁，命中交人工终判。
+
+    subprocess 调 check_seam.py（同 cmd_deai 调 node 脚本模式）；
+    脚本只读两章窗口文本，轻量，60s timeout 兜底。
+    """
+    if chapter <= 1:
+        return 0
+    seam_script = SCRIPT_DIR / "check_seam.py"
+    try:
+        result = subprocess.run(
+            [sys.executable, str(seam_script), "--project", str(root), "--chapter", str(chapter)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        print(f"⚠️  seam 检测未执行（{type(e).__name__}: {e}），advisory 降级不拦门禁")
+        return 0
+    output = (result.stdout or result.stderr).strip()
+    if output:
+        print(output)
+    return 0
+
+
 def cmd_meta_mark(body: Path) -> int:
     text = re.sub(r"<!--.*?-->", "", body.read_text(encoding="utf-8"), flags=re.DOTALL)
     if META_MARKDOWN_RE.search(text):
@@ -269,7 +301,8 @@ def cmd_outline(outline_path: Path) -> int:
                 missing.append("底线")
             story_missing = []
             for field in personal_story_fields:
-                m = re.search(rf"{field}[：:]\s*(.+)", t)
+                # 兼容模板加粗「- **出身与来处**：」与普通「- 出身与来处：」两种格式
+                m = re.search(rf"{field}\*{{0,2}}[：:]\s*(.+)", t)
                 if not m:
                     story_missing.append(field)
                     continue
@@ -339,6 +372,66 @@ def cmd_spec_fulfillment(spec_path: Path) -> int:
     if rate < 0.8:
         print("❌ 履约不足：大纲要点勾选率 <80%。要么补写漏掉的关键事件，要么回 spec 改计划并注明原因")
         return 1
+    return 0
+
+
+def cmd_cast_presence(root: Path, chapter: int, draft_path: Path) -> int:
+    """选角出场检查（liyu G6 本体）：spec「出场角色」清单里的角色是否真的在正文出现。
+
+    阈值取 liyu 实证参数：缺席 ≥ max(2, ⌈2n/3⌉) 拦截（大面积剧情失约）；
+    全员 0 次出现降级 warning（第一人称/代词化是正常叙事选择，宁漏勿错杀）；
+    仅出场 1 次记「叙事力度不足」提示。别名「张三（火哥）」任一命中即算出场。
+    """
+    spec_path = root / f"chapters/chapter-{chapter:03d}/spec.md"
+    if not spec_path.exists():
+        print("⚠️  选角出场：spec.md 不存在，跳过（不拦门禁）")
+        return 0
+    spec = spec_path.read_text(encoding="utf-8")
+    m = re.search(r"## 出场角色[^\n]*\n(.*?)(?=\n## |\Z)", spec, flags=re.S)
+    if not m:
+        print("⚠️  选角出场：spec 无「出场角色」节（旧版模板），跳过；建议重新跑 chapter_flow prepare")
+        return 0  # 旧版 spec 无此节，跳过
+    names: list[tuple[str, list[str]]] = []
+    for line in m.group(1).splitlines():
+        line = line.strip().lstrip("-").strip()
+        if not line:
+            continue
+        # 容忍 AI 补写：取冒号/逗号/空格前的名字段（「- 张三：本章受伤」→「张三」）
+        line = re.split(r"[：:，,、\s]", line, 1)[0].strip()
+        alias_match = re.fullmatch(r"([\u4e00-\u9fffA-Za-z0-9·]{1,12})(?:[（(]([^）)]{1,12})[）)])?", line)
+        if not alias_match:
+            continue
+        real, alias = alias_match.group(1), alias_match.group(2)
+        if len(real) < 2:
+            continue  # 单字名子串匹配几乎必命中，无检查价值
+        aliases = [real] + ([alias] if alias else [])
+        # ≥4 字人名补核心名（身份+人名切尾 2/3 字），如「国师玄冥」→「玄冥」
+        if len(real) >= 4:
+            aliases.extend({real[-2:], real[-3:]})
+        names.append((real, aliases))
+    if not names:
+        return 0
+    body = draft_path.read_text(encoding="utf-8")
+    missing = [real for real, aliases in names if not any(a in body for a in aliases)]
+    total = len(names)
+    if not total:
+        return 0
+    # 全员 0 次出现 = 多半是第一人称/代词化叙事，降级 warning 不拦（宁漏勿错杀）
+    if len(missing) == total:
+        print("⚠️  出场角色全部未按名出现（可能第一人称/代词化叙事）：确认是否刻意为之")
+        return 0
+    threshold = max(2, -(-2 * total // 3))
+    if len(missing) >= threshold:
+        print(
+            f"❌ 选角失约：spec 计划出场的 {total} 人中 {len(missing)} 人未在正文出现"
+            f"（{'、'.join(missing)}）——要么补写其戏份，要么回 spec 更新出场名单并注明"
+        )
+        return 1
+    for real, aliases in names:
+        hits = sum(body.count(a) for a in aliases)
+        if 0 < hits <= 2:
+            print(f"⚠️  「{real}」正文仅出现 {hits} 次：计划出场角色叙事力度不足，确认是否有戏")
+            break
     return 0
 
 
@@ -443,13 +536,23 @@ def cmd_unknown_speakers(draft_path: Path) -> int:
     # 说话人：」后 2-4 个 CJK 紧跟引导动词
     ADVERBS = {"小声", "低声", "轻声", "回头", "转头", "连忙", "赶紧", "忽然", "顿时", "立刻", "马上", "冷冷", "淡淡", "缓缓", "慢慢", "轻轻", "忽然", "突然", "随即"}
     speakers = set()
+
+    def _known_adverb(name: str) -> bool:
+        if name in ADVERBS or name[-1] in "先又也都才便就忙急再":
+            return True
+        if name[0] in "他她它" and (name[1:] in ADVERBS or not name[1:]):
+            return True
+        return False
+
     for m in re.finditer(r"」([\u4e00-\u9fff]{2,3}?)[说问道喊应叫笑骂]", text):
         name = m.group(1)
-        if name in ADVERBS or name[-1] in "先又也都才便就忙急再":
-            continue
-        if name[0] in "他她" and name[1:] in ADVERBS:
-            continue
-        speakers.add(name)
+        if not _known_adverb(name):
+            speakers.add(name)
+    # 前置式：「马六说道」「马六问」——原实现只认后置式，前置式全部漏检
+    for m in re.finditer(r"([\u4e00-\u9fff]{2,3}?)(?:说道|问道|喊道|应道|答道|喝道|骂道|笑道|叫道|低声道|沉声道|开口道)", text):
+        name = m.group(1)
+        if not _known_adverb(name):
+            speakers.add(name)
     if not speakers:
         return 0
     # 已知名单：tracking 角色 + 大纲 + 通用人称
@@ -549,6 +652,38 @@ def cmd_typo_issues(body: Path) -> int:
     return run_rules(body.read_text(encoding="utf-8"), rules)
 
 
+def cmd_writing_rules(root: Path, draft_path: Path) -> int:
+    """写作规则库写后投影（G5）：执行 writing-rules.json 的 check 字段。
+
+    写前投影（guide → spec.md「规则注入」节）由 assemble_spec.py 完成；
+    本函数补写后投影——同一份规则写前注入、写后检查。规则损坏降级提示不阻断
+    （规则库是纪律提示，非账本一致性）。"""
+    rules_file = Path(__file__).resolve().parent.parent / "references" / "writing-rules.json"
+    if not rules_file.exists():
+        print("⚠️  writing-rules.json 缺失：写作规则库检查侧未执行")
+        return 0
+    try:
+        data = json.loads(rules_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"⚠️  writing-rules.json 损坏（{e}）：写作规则库检查侧未执行")
+        return 0
+    platform = load_pipeline(root).get("platform")
+    text = draft_path.read_text(encoding="utf-8")
+    rc = 0
+    for rule in data.get("rules", []):
+        check = rule.get("check")
+        if not isinstance(check, dict):
+            continue
+        rule_platform = rule.get("platform", "all")
+        if rule_platform != "all" and rule_platform != platform:
+            continue
+        if check.get("type") == "count_threshold":
+            rc = max(rc, run_count_rule(text, check))
+        else:
+            run_rules(text, {"rules": [check]})
+    return rc
+
+
 def cmd_prose_issues(body: Path) -> int:
     """语病模式扫描（advisory）：高频「短句压缩过度」错位模式 + CLG-CGEC 定式病句。
 
@@ -624,19 +759,30 @@ def run_step(step: str) -> int:
             print(f"❌ 未找到第 {chapter} 章正文（chapters/），无法校验")
             return 1
         prev_body = find_chapter_body(root, chapter - 1) if chapter > 1 else None
+        print("── 字数闸门（平台×类型）──")
         rc1, zone = cmd_wordcount(
             str(body), pipe.get("platform"), pipe.get("type") or "长篇小说"
         )
+        print("── G5 描写一致性（去AI味）──")
         rc2 = cmd_deai(str(body))
+        print("── G3 一致性（跨章衔接）──")
         rc3 = cmd_cross_chapter(body, prev_body)
+        cmd_seam(root, chapter)
         rc4 = cmd_meta_mark(body)
+        print("── G6 履约检查（spec 勾选率 ≥80%）──")
         rc5 = cmd_spec_fulfillment(root / f"chapters/chapter-{chapter:03d}/spec.md")
+        rc5 = max(rc5, cmd_cast_presence(root, chapter, body))
+        print("── G3 一致性（世界规则 advisory）──")
         cmd_world_rules_advisory(body)
+        print("── G5 描写一致性（风格基线）──")
         rc6 = cmd_style_baseline(body)
+        print("── G4 未知实体（未登记说话人）──")
         cmd_unknown_speakers(body)
+        print("── G5 描写一致性（语病/说教/规则库，规则检查侧）──")
         cmd_prose_issues(body)
         cmd_typo_issues(body)
         rc7 = cmd_sermon_density(body)
+        rc7 = max(rc7, cmd_writing_rules(root, body))
         cmd_pacing_balance(root, chapter)
 
         # 连续软区趋势防线：连续 3 章落在同一软区 → 升级为硬拦截。

@@ -14,9 +14,10 @@ import argparse
 import subprocess
 import sys as _sys
 import sys
+import re
 from pathlib import Path
 
-from _common import find_project_root
+from _common import read_json, find_project_root
 
 
 def run(script: str, *args: str, cwd: Path) -> int:
@@ -39,6 +40,16 @@ def main() -> int:
     title = args.title or root.name
     out = root / f"成书-{title}.md"
     print(f"📕 《{title}》 全书收尾")
+
+    # 中途收尾警告：大纲规划的章数未写完时提示（不阻断——作者可能有意分段成书）
+    outline_path = root / "outline.md"
+    pipe = read_json(root / ".story" / "pipeline.json", default={}) or {}
+    cur = int(pipe.get("chapter") or 0)
+    if outline_path.exists() and cur:
+        total_m = re.search(r"[规划共约]+\s*(\d+)\s*章|共\s*(\d+)\s*章", outline_path.read_text(encoding="utf-8"))
+        planned = int(total_m.group(1) or total_m.group(2)) if total_m else None
+        if planned and cur <= planned:
+            print(f"  ⚠️ 大纲规划约 {planned} 章，当前写到第 {cur} 章——中途收尾，确认是否有意分段成书")
 
     rc = run("export_book.py", "--project", str(root), "--output", str(out), cwd=root)
     if rc != 0:

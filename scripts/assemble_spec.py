@@ -23,6 +23,31 @@ from _common import PIPELINE_FILE, find_project_root, read_json
 
 SPEC_DIR_TMPL = "chapters/chapter-{chapter:03d}"
 SECTION_RE = re.compile(r"^## (.+)$")
+WRITING_RULES_FILE = Path(__file__).resolve().parent.parent / "references" / "writing-rules.json"
+
+
+def writing_rule_lines(root: Path, scope: str = "generate") -> list[str]:
+    """写作规则库写前投影：读 references/writing-rules.json，
+    按 scope + platform 过滤（tier=core 恒注入；standard 需平台匹配），返回 guide 行。
+    规则缺失/损坏时静默降级为空（不阻塞蓝图组装）。"""
+    data = read_json(WRITING_RULES_FILE)
+    if not isinstance(data, dict):
+        return []
+    state = read_json(root / PIPELINE_FILE, default={}) or {}
+    platform = state.get("platform") if isinstance(state, dict) else None
+    lines: list[str] = []
+    for rule in data.get("rules", []):
+        if not isinstance(rule, dict) or not rule.get("guide"):
+            continue
+        if scope not in rule.get("scope", ["generate"]):
+            continue
+        rule_platform = rule.get("platform", "all")
+        if rule.get("tier") != "core" and platform and rule_platform != "all" and rule_platform != platform:
+            continue
+        tag = "红线" if rule.get("tier") == "core" else "标准"
+        name = rule.get("name", "")
+        lines.append(f"- [{tag}·{name}] {rule['guide']}")
+    return lines
 
 
 def playbook_reminders(root: Path) -> list[str]:
@@ -275,14 +300,22 @@ def card_hook_lines(root: Path) -> list[str]:
 def foreshadow_lines(root: Path, chapter: int, outline_plants: list[str]) -> list[str]:
     rows = parse_foreshadow_table(read_text(root / "tracking" / "foreshadows.md"))
     lines = []
+    closed = []
     for row in rows:
-        if row["status"] != "已埋":
-            continue
-        if chapter_in(row["planned"], chapter):
-            lines.append(f"- 回收 {row['id']}：{row['summary'][:40]}（计划回收 {row['planned']}）")
-        elif chapter_in(row["planned"], chapter + 1) or chapter_in(row["planned"], chapter + 2):
-            lines.append(f"- 推进 {row['id']}：临近回收（{row['planned']}），本章为回收铺垫")
+        if row["status"] == "已埋":
+            if chapter_in(row["planned"], chapter):
+                lines.append(f"- 回收 {row['id']}：{row['summary'][:40]}（计划回收 {row['planned']}）")
+            elif chapter_in(row["planned"], chapter + 1) or chapter_in(row["planned"], chapter + 2):
+                lines.append(f"- 推进 {row['id']}：临近回收（{row['planned']}），本章为回收铺垫")
+        elif row["status"] in ("已回收", "已过期", "放弃"):
+            closed.append(f"{row['id']}（{row['summary'][:30]}）")
     lines.extend(outline_plants)
+    # 反向提示：已回收/已过期/放弃的悬念严禁重复写——长篇隔几十章后重提已揭晓悬念是高频吃书点。
+    # 上限 20 条：数百条全列会稀释关键信息；超出时只列最近 20 条（按编号最大优先）。
+    if closed:
+        shown = closed[-20:]
+        suffix = f"（共 {len(closed)} 条，仅列最近 {len(shown)} 条）" if len(closed) > 20 else ""
+        lines.append(f"- ⛔ 已了结，本章严禁重复写或再当悬念用{suffix}：{'、'.join(shown)}")
     return lines
 
 
@@ -353,6 +386,11 @@ def assemble(root: Path, chapter: int) -> str:
         lines = [character_line(root, n) for n in chars] or ["- （无活跃核心角色，按大纲本章出场补充）"]
         replace_section("角色要点", "\n".join(lines) + "\n")
 
+    # 出场角色清单（选角出场检查的依据：checks.py cast_presence 比对正文）
+    cp = section("出场角色")
+    if section_empty(cp) and chars:
+        replace_section("出场角色", "\n".join(f"- {n}" for n in chars) + "\n")
+
     # 前情衔接
     pre = section("前情衔接")
     if section_empty(pre):
@@ -405,6 +443,13 @@ def assemble(root: Path, chapter: int) -> str:
     if hooks and section_empty(tp):
         replace_section("题材要点", "（题材卡「章尾钩子」节，按本章择用）\n" + "\n".join(hooks) + "\n")
 
+    # 规则注入（写作规则库写前投影：core 恒注入，standard 按平台过滤）
+    rl = section("规则注入")
+    if section_empty(rl):
+        rule_lines = writing_rule_lines(root)
+        if rule_lines:
+            replace_section("规则注入", "\n".join(rule_lines) + "\n")
+
     # 质量反哺：上一章冷读低分 → 本章 spec 提示（趋势数据消费，防低分被淹没）
     trend_file = root / ".story" / "quality-trend.json"
     try:
@@ -426,16 +471,23 @@ def assemble(root: Path, chapter: int) -> str:
     if section_empty(st):
         style += playbook_reminders(root)
         replace_section("风格指令", "\n".join(style) + "\n")
-    elif "语病避雷" not in st:
-        # 已组装的 spec：追加语病避雷节（含质量反哺），不覆盖 AI 填过的内容
-        avoid = style_lines(root)
-        avoid = [l for l in avoid if l.startswith("## ") or l.startswith("- ")]
-        block = "\n".join(l for l in avoid[avoid.index("## 语病避雷（写作时必守，写完自校）"):])
+    elif "语病避雷" not in st and "## 语病避雷" not in spec:
+        # 已组装的 spec：追加语病避雷节（含质量反哺），不覆盖 AI 填过的内容。
+        # 双重防重：风格指令节内与全 spec 任一位置已有该节都不再追加
+        #（历史上 replace 目标不匹配会静默失败 → 每次重跑堆积一份）
+        # 与主路径同源：读作者级 style-anchor（root 参数是历史误用，书根无 .novel/）
+        avoid = style_lines(author) if author else []
+        if "## 语病避雷（写作时必守，写完自校）" in avoid:
+            avoid = [l for l in avoid if l.startswith("## ") or l.startswith("- ")]
+            block = "\n".join(l for l in avoid[avoid.index("## 语病避雷（写作时必守，写完自校）"):])
+        else:
+            block = ""
         extra = [l for l in style if l.startswith("- （质量反哺）")]
         if extra:
             block += "\n" + "\n".join(extra)
-        spec = spec.replace("## 风格指令\n" + st, "## 风格指令\n" + st.rstrip("\n") + "\n\n" + block + "\n")
-        print("   已追加：语病避雷（写作时必守）+ 质量反哺")
+        if block.strip() and ("## 风格指令\n" + st) in spec:
+            spec = spec.replace("## 风格指令\n" + st, "## 风格指令\n" + st.rstrip("\n") + "\n\n" + block + "\n")
+            print("   已追加：语病避雷（写作时必守）+ 质量反哺")
 
     # 本章净变化 + 主角代价（红线 3 无后果 / 特质 3 选择有代价 的落点字段）
     net = section("本章净变化")
@@ -466,7 +518,7 @@ def main() -> int:
         return 1
     out = assemble(root, args.chapter)
     print(f"✅ spec 已组装：{out}")
-    print("   已自动填：大纲要点/概念预算提示/角色要点/前情衔接/知情边界/时间线定位/伏笔指令/题材要点/风格指令")
+    print("   已自动填：大纲要点/概念预算提示/角色要点/前情衔接/知情边界/时间线定位/伏笔指令/题材要点/风格指令/规则注入")
     print("   AI 只需补：概念取舍、本章故事时间推进、钩子设计等判断项")
     return 0
 

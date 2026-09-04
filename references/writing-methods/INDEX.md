@@ -3,6 +3,8 @@
 > 召回规则：先查本索引匹配主题，再 Read 对应单份文件；不要整套预读。
 > 加载节点：novel-init 定方向（题材/读者）、novel-outline 大纲（结构/节奏）、novel-draft 写作（技法/文风）、story-long-analyze 拆书（方法论对照）。
 
+| 文件 | 内容 |
+|---|---|
 | [character-basics.md](character-basics.md) | 角色基础设计 |
 | [character-design-methods.md](character-design-methods.md) | 角色设计操作手册 |
 | [character-relations.md](character-relations.md) | 角色关系与感情线操作手册 |

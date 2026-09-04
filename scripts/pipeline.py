@@ -34,6 +34,7 @@ import json
 import subprocess
 import sys
 from datetime import datetime
+import hashlib
 from pathlib import Path
 
 from _common import PIPELINE_FILE, STORY_DIR, find_project_root
@@ -126,9 +127,19 @@ def _waiting_checkpoints(state: dict) -> list[str]:
 def cmd_init(args: argparse.Namespace) -> int:
     root = Path.cwd()
     if find_project_root(root) is not None:
-        print(f"❌ 当前目录已在项目中（{find_project_root(root)}）")
-        print("   不能嵌套初始化。请换一个目录，或用 pipeline.py status 查看现状。")
-        return 1
+        if getattr(args, "force_rebuild", False):
+            # 状态文件损坏时的官方恢复路径：旧 .story/ 整体备份改名（不删除任何数据），
+            # 再重建全新状态机。账本 tracking/ 不动——账本数据通常完好，重建的只是 pipeline.json。
+            import time as _time
+            story = root / ".story"
+            backup = root / f".story.bak-{_time.strftime('%Y%m%d-%H%M%S')}"
+            story.rename(backup)
+            print(f"   ♻️ 旧 .story/ 已备份为 {backup.name}（含损坏的 pipeline.json）")
+        else:
+            print(f"❌ 当前目录已在项目中（{find_project_root(root)}）")
+            print("   不能嵌套初始化。请换一个目录，用 pipeline.py status 查看现状；")
+            print("   若状态文件损坏无法读取，用 pipeline.py init --force-rebuild <项目名> 重建（旧 .story/ 会备份）")
+            return 1
 
     state = _default_state()
     state["project"] = args.project
@@ -162,6 +173,26 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     state = load_state(root)
     print(f"📖 项目：{state['project']}（第 {state['chapter']} 章）")
+    # 章号对账警告：pipeline.chapter 与账本 last_committed_chapter 错位时提示
+    #（防「pipeline 显示第 5 章可写、账本停在第 2 章」的静默窗口——提交时才会 fail-closed）
+    ledger_path = root / "tracking" / "_tracking-state.json"
+    if ledger_path.exists():
+        try:
+            import json as _json
+            last_committed = int(
+                _json.loads(ledger_path.read_text(encoding="utf-8")).get(
+                    "last_committed_chapter"
+                )
+                or 0
+            )
+            if last_committed + 1 < int(state["chapter"]):
+                print(
+                    f"   ⚠️ 章号错位：pipeline 在第 {state['chapter']} 章，"
+                    f"但账本只提交到第 {last_committed} 章——"
+                    f"第 {last_committed + 1} 章-{int(state['chapter']) - 1} 章的事务未提交，先补交再写作"
+                )
+        except (OSError, ValueError):
+            pass
     print(
         f"   题材：{state['genre'] or '未定'} | "
         f"类型：{state.get('type') or '长篇小说'} | "
@@ -329,6 +360,29 @@ def cmd_advance(args: argparse.Namespace) -> int:
     state["steps"][step] = "done"
     print(f"✅ 完成步骤：{step}")
 
+    # ── 正文指纹防线：防「draft 过门后偷换正文绕过质量门」──
+    # draft 通过时固化指纹；revise/archive 时核对，改过稿就必须重新过 checks.py draft 全套。
+    ch_dir = root / f"chapters/chapter-{state['chapter']:03d}"
+    draft_file = ch_dir / "draft.md"
+    def _draft_hash() -> str:
+        return hashlib.sha256(
+            (draft_file.read_text(encoding="utf-8") if draft_file.exists() else "").encode("utf-8")
+        ).hexdigest()[:16]
+
+    if step == "draft" and state["steps"]["draft"] == "done":
+        state["draft_hash"] = _draft_hash()
+    elif step in ("revise", "archive") and state.get("draft_hash"):
+        if _draft_hash() != state["draft_hash"]:
+            print("⚠️  draft.md 在 advance draft 之后被修改过——重跑全套内容校验（checks.py draft）")
+            ok2, _ = _run_checks(root, "draft")
+            if not ok2:
+                print(f"❌ 校验锁：改稿后未通过 checks.py draft 复检")
+                state["steps"][step] = "pending"
+                save_state(root, state)
+                return 1
+            state["draft_hash"] = _draft_hash()
+            print("   ✅ 改稿复检通过，指纹已更新")
+
     # 触发检查点
     cid = CHECKPOINT_AFTER.get(step)
     if cid and state["checkpoints"][cid] == "none":
@@ -351,6 +405,27 @@ def _run_checks(root: Path, step: str) -> tuple[bool, str | None]:
     """
     if step not in ("outline", "draft", "archive"):
         return True, None
+    # 归档前置断言：本章事务必须已提交进账本（漏提交会一路冻结归档，
+    # 直到下一章 gen_commit 章号不匹配才暴露，届时上一章已归档无法回补）。
+    if step == "archive":
+        ledger_path = root / "tracking" / "_tracking-state.json"
+        if ledger_path.exists():
+            try:
+                import json as _json
+                last_committed = int(
+                    _json.loads(ledger_path.read_text(encoding="utf-8")).get(
+                        "last_committed_chapter"
+                    )
+                    or 0
+                )
+                if last_committed < load_state(root)["chapter"]:
+                    print(
+                        f"   ✗ 第 {load_state(root)['chapter']} 章事务尚未提交进账本"
+                        f"（last_committed_chapter={last_committed}）——先跑 tracking_commit.py commit 再归档"
+                    )
+                    return False, None
+            except (OSError, ValueError):
+                print("   ⚠️ 账本不可读，归档一致性校验可能不完整")
     checks_script = Path(__file__).parent / "checks.py"
     if not checks_script.exists():
         print("   ✗ 错误：checks.py 不存在，校验锁无法执行——禁止放行（fail-closed）")
@@ -431,6 +506,40 @@ def cmd_next_chapter(args: argparse.Namespace) -> int:
     return 0
 
 
+def _verify_review_integrity(root: Path, chapter: int) -> str | None:
+    """校验 review.md 评分的完整性，返回拒绝原因或 None。
+
+    三道防线（按序）：
+    1. draft 指纹一致：review.md 必须由 coldread_material.py 对当前 draft.md 生成
+       （draft-hash 匹配）——防手写评分文件、防改稿后拿旧评分过关；
+    2. 材料在评分之前：指纹必须出现在「评分：」行之前——防 agent 在文件末尾
+       补贴指纹伪装成脚本产物（脚本生成时指纹在文件头部）；
+    3. 评分格式合法：四维 1-5（0 视为占位伪造）。
+    """
+    review = root / f"chapters/chapter-{chapter:03d}/review.md"
+    if not review.exists():
+        return "冷读未完成（review.md 不存在）：先跑 coldread_material.py + 冷读裁判"
+    text = review.read_text(encoding="utf-8")
+    m = re.search(r"评分：(\d),(\d),(\d),(\d)", text)
+    if not m and not re.search(r"翻页欲 \d", text):
+        return "冷读未完成（review.md 无四维评分）：先跑冷读裁判，不能跳过 revise"
+    draft = root / f"chapters/chapter-{chapter:03d}/draft.md"
+    body_hash = hashlib.sha256(
+        (draft.read_text(encoding="utf-8") if draft.exists() else "").encode("utf-8")
+    ).hexdigest()[:16]
+    hm = re.search(r"<!-- draft-hash:([0-9a-f]{16}) -->", text)
+    if hm is None:
+        return "review.md 缺少脚本指纹（draft-hash）：评分不是 coldread_material.py 产物，疑为手写伪造"
+    if hm.group(1) != body_hash:
+        return "review.md 正文指纹与当前 draft.md 不一致：改稿后必须重跑冷读（coldread_material.py --write-review --force）"
+    score_pos = m.start() if m else re.search(r"翻页欲 \d", text).start()
+    if score_pos < hm.end():
+        return "review.md 指纹出现在评分之后：评分段疑似手写拼接，不视为冷读产物"
+    if m and any(int(x) < 1 or int(x) > 5 for x in m.groups()):
+        return "冷读四维评分越界（1-5）：review.md 疑似伪造，不能跳过 revise"
+    return None
+
+
 def cmd_skip(args: argparse.Namespace) -> int:
     step = args.step
     if step != "revise":
@@ -446,16 +555,14 @@ def cmd_skip(args: argparse.Namespace) -> int:
     if state["steps"]["draft"] != "done":
         print("❌ draft 未完成，不能跳过 revise")
         return 1
-    # 冷读门禁：review.md 必须有四维评分落盘，否则冷读可被 skip 绕过
-    review = root / f"chapters/chapter-{state.get('chapter', 0):03d}/review.md"
-    if not review.exists() or not re.search(r"评分：\d,\d,\d,\d|翻页欲 \d", review.read_text(encoding="utf-8")):
-        print("❌ 冷读未完成（review.md 无四维评分）：先跑冷读裁判，不能跳过 revise")
+    # 冷读门禁：评分完整性三道防线（指纹一致 + 指纹在评分前 + 格式合法）
+    reason = _verify_review_integrity(root, state.get("chapter", 0))
+    if reason:
+        print(f"❌ {reason}")
         return 1
-    # 校验四维分数区间：任一维越界（<0 或 >5）说明评分来源可疑，拒绝 skip
-    m = re.search(r"评分：(\d),(\d),(\d),(\d)", review.read_text(encoding="utf-8"))
-    if m and any(int(x) < 0 or int(x) > 5 for x in m.groups()):
-        print("❌ 冷读四维评分越界（0-5）：review.md 疑似伪造，不能跳过 revise")
-        return 1
+    if state["steps"]["revise"] == "done":
+        print("ℹ️  revise 已为 done（真修订过），保持 done 不改标 skipped")
+        return 0
     state["steps"]["revise"] = "skipped"
     save_state(root, state)
     print("✅ revise 已跳过（冷读通过，直接归档）")
@@ -492,7 +599,33 @@ def cmd_skip_chapter(args: argparse.Namespace) -> int:
         return 1
 
     state = load_state(root)
+    # 熔断前置：skip-chapter 是重写 3 轮仍失败后的最后手段，不是绕过质量门的捷径。
+    # 未触发熔断（rewrite_rounds < 3）时必须走 fail → 修复/重写循环。
+    if state.get("rewrite_rounds", 0) < 3:
+        print(
+            f"❌ skip-chapter 仅在重写 3 轮仍失败后可用（当前 rewrite_rounds={state.get('rewrite_rounds', 0)}）。"
+            "本章校验不过时先修内容，修不动跑 pipeline.py fail 记录失败，3 次触发重写轮。"
+        )
+        return 1
     chapter = state["chapter"]
+    # 章号断层防护：skip 的必须是账本最后一章（chapter == last_committed_chapter + 1）。
+    # 否则下一章 append 永远不满足「chapter == last+1」，账本永久卡死无法自愈。
+    ledger_path = root / "tracking" / "_tracking-state.json"
+    last_committed = None
+    if ledger_path.exists():
+        try:
+            import json as _json
+            ledger = _json.loads(ledger_path.read_text(encoding="utf-8"))
+            last_committed = int(ledger.get("last_committed_chapter") or 0)
+        except (OSError, ValueError):
+            last_committed = None
+    if last_committed is not None and chapter != last_committed + 1:
+        print(
+            f"❌ skip-chapter 拒绝：第 {chapter} 章不是账本最后一章"
+            f"（账本 last_committed_chapter={last_committed}），直接跳过会让后续章 append 永久卡死。"
+            "先补交缺失章的事务（tracking_commit.py commit）再 skip"
+        )
+        return 1
     failed = state.get("failed_chapters", [])
     failed.append(chapter)
     state["failed_chapters"] = failed
@@ -539,6 +672,8 @@ def main() -> int:
     p_init.add_argument("project", help="项目名")
     p_init.add_argument("--genre", help="题材（如 都市/玄幻/甜宠）")
     p_init.add_argument("--platform", help="平台（如 番茄/起点/知乎）")
+    p_init.add_argument("--force-rebuild", action="store_true",
+                        help="状态文件损坏时：备份旧 .story/ 并重建（账本 tracking/ 不动）")
     p_init.add_argument("--type", help="类型（长篇小说/短故事）", default="长篇小说")
     p_init.set_defaults(func=cmd_init)
 

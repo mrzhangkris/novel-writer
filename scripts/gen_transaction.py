@@ -3,7 +3,7 @@
 
 把「手写事务 JSON」变成「生成 → 改 → 提交」：
   1. 读状态机（pipeline.json）与状态账本（_tracking-state.json）
-  2. 按 tracking-transaction.md 协议生成结构完整的事务初稿：
+  2. 按 references/architecture.md 的 CHANGES 协议生成结构完整的事务初稿：
      - expected_state_revision 自动填当前修订号
      - context 的 long_term_constraints / continuity_risks / position / active_character_names 原样带回
      - 每个活跃角色生成 character_changes 占位 + 快照预填当前值
@@ -16,7 +16,7 @@
   gen_transaction.py commit  --project <书目录> --revision  生成当前章 revision 事务
 
 注意：生成的是初稿。占位「（待填…）」必须替换；事务提交前请按
-references/tracking-transaction.md 校验语义（退役声明、快照⊆changes 等已由
+references/architecture.md 校验语义（退役声明、快照⊆changes 等已由
 本脚本保证结构正确，语义正确性由 agent 填写时负责）。
 """
 
@@ -71,7 +71,7 @@ def chapter_title_from_outline(root: Path, chapter: int) -> str:
 
 def gen_init(root: Path, pipe: dict) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "book_title": book_title(root),
         "last_chapter": 0,
         "context": {
@@ -203,7 +203,7 @@ def gen_commit(root: Path, pipe: dict, revision: bool) -> dict:
     state = read_json(state_path)
     if state is None or not isinstance(state, dict):
         print(f"❌ 状态账本损坏或不可读：{root / 'tracking/_tracking-state.json'}——先修账本再生成事务")
-        return 1
+        raise SystemExit(2)
 
     last = state["last_committed_chapter"]
     revision_no = state["state_revision"]
@@ -234,7 +234,7 @@ def gen_commit(root: Path, pipe: dict, revision: bool) -> dict:
     foreshadow_candidates = _foreshadow_candidates(root, chapter, state)
 
     tx = {
-        "schema_version": 1,
+        "schema_version": 2,
         "mode": "revision" if revision else "append",
         "chapter": chapter,
         "chapter_title": chapter_title_from_outline(root, chapter),
@@ -246,6 +246,14 @@ def gen_commit(root: Path, pipe: dict, revision: bool) -> dict:
             ],
             "foreshadow_changes": foreshadow_candidates,
             "timeline_events": [],
+            "plot_points": [],
+            # 道具/秘密/誓约：本章有变动才填，形状见 references/architecture.md
+            # items:   {"action": "upsert", "name": "…", "holder": "现持有者", "note": "…"}
+            # secrets: {"action": "upsert", "name": "…", "known_by": "知情者，顿号分隔", "revealed": false}
+            # pledges: {"action": "upsert", "name": "…", "due_chapter": 15, "status": "未兑现"}
+            "items": [],
+            "secrets": [],
+            "pledges": [],
             "constraints": [],
             "next_chapter_commitments": [],
             "retired_context_items": [],
@@ -259,6 +267,7 @@ def gen_commit(root: Path, pipe: dict, revision: bool) -> dict:
                 "story_time": story_time,
                 "scene": scene,
             },
+            "active_scene": state["context"].get("active_scene", ""),
             "long_term_constraints": list(
                 state["context"]["long_term_constraints"]
             ),
@@ -312,7 +321,7 @@ def main() -> int:
         print("   伏笔候选只删不改（没发生的回收删掉）；story_time 按本章更新")
         print("   注意：如需退役 continuity_risks / long_term_constraints 条目，逐条填进 retired_context_items")
         print("   新增能力/概念填入 new_abilities；剧情打破世界硬规则时必须在 rule_overrides 登记（rule/reason/effective_chapter/payback）")
-        print("   填表约束：result ≤360 字节；constraints 只收字符串；character_snapshots 恰好等于 character_changes 的角色；退役条目须与账本原文逐字一致")
+        print("   填表约束：result ≤480 字节；constraints 只收字符串；character_snapshots 恰好等于 character_changes 的角色；退役条目须与账本原文逐字一致")
     here = Path(__file__).resolve().parent
     print(f"   提交：python3 {here / 'tracking_commit.py'} "
           f"{'init' if args.command == 'init' else 'commit'} --project {root} --input {out}")

@@ -44,7 +44,7 @@
 ## 脚本解析约定
 
 - 脚本定位 `## 硬规则清单` 与 `## 能力白名单` 两个二级标题，各解析其后**第一张** markdown 表格
-- **离奇判定**：checks.py draft 扫描正文是否命中「禁止」行的触发词——命中时提示；若本章事务已登记 `rule_overrides`（见 tracking-transaction.md）则提示已登记放行
+- **离奇判定**：checks.py draft 扫描正文是否命中「禁止」行的触发词——命中时提示；若本章事务已登记 `rule_overrides`（见 architecture.md）则提示已登记放行
 - **规则演进**：剧情要打破硬规则时，**不要回来改表**——在当章事务 `delta.rule_overrides` 登记（理由+代价），账本记入 `tracking/overrides.md`；表本身只在该规则「永久废除/替换」时才更新，并在表中注明「见 overrides.md 第X章」
 - 表格外的自由叙事仅供人读，脚本不解析
 - 表格列数、表头必须严格一致；触发词用中文逗号 `、` 分隔

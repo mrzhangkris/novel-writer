@@ -29,6 +29,7 @@ def render_snapshot(
         f"- 位置：{snapshot['location']}",
         f"- 当前目标：{snapshot['goal']}",
         f"- 身心状态：{snapshot['state']}",
+        *(["- ⚰️ 已死亡（复活须 rule_overrides 登记）"] if not snapshot.get("alive", True) else []),
         "",
     ]
     lines.extend(section("能力与资源", snapshot["abilities_resources"]))
@@ -224,6 +225,26 @@ def render_delta(
             )
     if not delta["timeline_events"]:
         lines.append("- 无")
+    if delta.get("plot_points"):
+        lines.extend(["", "## 情节点推进"])
+        lines.extend(f"- {item}" for item in delta["plot_points"])
+    ledger_sections = (
+        ("## 道具变动", "items",
+         lambda it: f"- {it['name']}｜持有：{it.get('holder', '')}｜{it.get('note', '')}"),
+        ("## 秘密变动", "secrets",
+         lambda it: f"- {it['name']}｜知情：{it.get('known_by', '')}｜{'已揭示' if it.get('revealed') else '未揭示'}"),
+        ("## 誓约变动", "pledges",
+         lambda it: f"- {it['name']}｜{'第' + str(it['due_chapter']) + '章前' if isinstance(it.get('due_chapter'), int) else '限期未定'}｜{it.get('status', '未兑现')}"),
+    )
+    for title, key, fmt in ledger_sections:
+        rows = delta.get(key) or []
+        if not rows:
+            continue
+        lines.extend(["", title])
+        lines.extend(
+            f"- {it['name']}｜删除登记" if it["action"] == "delete" else fmt(it)
+            for it in rows
+        )
     lines.extend(["", "## 连贯性约束"])
     lines.extend(f"- {item}" for item in delta["constraints"])
     if not delta["constraints"]:
@@ -293,6 +314,34 @@ def render_threads(state: dict[str, Any]) -> str:
         )
     return "\n".join(lines) + "\n"
 
+def render_ledger(state: dict[str, Any]) -> str:
+    """道具/秘密/誓约三类台账的合并派生视图（tracking/ledger.md）。"""
+    lines = [
+        "> 派生视图（tracking_commit 生成，禁止手改）。道具在谁手上/秘密谁知道/誓约是否兑现——长篇对账底账。",
+        "",
+    ]
+    sections = (
+        ("## 道具（name | 持有者 | 备注）", state["items"],
+         lambda row: f"- {row['name']}｜{row.get('holder', '')}｜{row.get('note', '')}"),
+        ("## 秘密（name | 知情者 | 是否已揭示）", state["secrets"],
+         lambda row: f"- {row['name']}｜{row.get('known_by', '')}｜{'已揭示' if row.get('revealed') else '未揭示'}"),
+        ("## 誓约（name | 限期章 | 状态）", state["pledges"],
+         lambda row: f"- {row['name']}｜{'第' + str(row['due_chapter']) + '章前' if isinstance(row.get('due_chapter'), int) else '限期未定'}｜{row.get('status', '未兑现')}"),
+    )
+    for title, bucket, fmt in sections:
+        lines.append(title)
+        rows = sorted(
+            bucket.values(),
+            key=lambda row: (row.get("updated_chapter", 0), row.get("name", "")),
+        )
+        if rows:
+            lines.extend(fmt(row) for row in rows)
+        else:
+            lines.append("- （暂无）")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def render_views(state: dict[str, Any]) -> dict[str, str]:
     revision = state["state_revision"]
     views = {
@@ -300,6 +349,7 @@ def render_views(state: dict[str, Any]) -> dict[str, str]:
         "foreshadows.md": render_foreshadow(state["foreshadow"], revision),
         "overrides.md": render_overrides(state["overrides"], revision),
         "threads.md": render_threads(state),
+        "ledger.md": render_ledger(state),
     }
     author, reader = render_timeline_views(state["timeline"], revision)
     views["timeline/author-truth.md"] = author

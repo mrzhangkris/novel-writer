@@ -82,7 +82,8 @@ def cmd_record(args: argparse.Namespace) -> int:
         {
             "chapter": chapter,
             "scores": scores,
-            "avg": round(sum(scores) / len(scores), 2),
+            # 均分统一「越高越好」：认知负荷（第 2 维）越低越好，取反后参与平均
+            "avg": round((sum(scores) - scores[1] + (6 - scores[1])) / len(scores), 2),
             "note": args.note or "",
         }
     )

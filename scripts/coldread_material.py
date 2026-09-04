@@ -17,21 +17,23 @@ review.md 首行会自动标注冷读方式，AI 在子代理不可用时按 inl
 from __future__ import annotations
 
 import argparse
+import hashlib
+import re
 from pathlib import Path
 
 from _common import find_project_root
 
-COLD_READ_PROMPT = """你是冷读者，从未读过本书的创作蓝图（大纲/设定/写作蓝图）。只凭下面提供给你的正文片段与前情速记，以普通读者视角逐段读，四维度各评 1-5 分并给一句理由：
+COLD_READ_PROMPT = """你是冷读者，从未读过本书的创作蓝图（大纲/设定/写作蓝图）。只凭下面提供给你的正文片段与前情速记评分——你只看到首尾各约 500 字，中间正文未提供，凡需要中间内容才能下的结论不要下。以普通读者视角逐段读，四维度各评 1-5 分并给一句理由：
 1. 翻页欲：读完是否想继续？（理想「未解答问题」2-4 个）
 2. 认知负荷：信息是否过载？（越低越好；首 500 字 >3 个未铺垫新元素 = 过载）
 3. 共情验证：仅凭已读内容，能否一句话概括角色此刻想要什么？概括不出 = 共情失败。
 4. 节奏感受：有没有「想跳过这段」或「等等刚才发生了什么」的地方？
-5. 文笔与自洽硬检（逐句过一遍；任一命中，总结论必须「打回」，并贴出原句与位置）：
+5. 文笔与自洽硬检（逐句过一遍；任一命中，总结论必须「打回」，并贴出原句与位置；同时把「节奏感受」维度评 ≤2 分并在理由注明命中的硬检项——自动化门禁按分数打回，分数不够低打回不会生效）：
    a. 指代悬空：「这/那+名词」首次出现，但前文没有对应物（例：前文只写了文件名，却写「他盯着那行字」）。注意：前情速记只覆盖近三章，「那/这+名词」若可能是更早章节埋设的跨章道具/事件（如「那封辞职信」「那通电话」），且本章正文内也有细节能推定其存在，不算悬空，不判打回；拿不准就放行，不要误打；
-   b. 事实矛盾：时间点与常识冲突（几点几分的天亮天黑/作息习惯）；在场状态冲突（「只有主角一个人」后，同段又出现别人已经到岗/凌晨还在发消息）；动作时序颠倒（先写「走上台」又写「上台前」）；
+   b. 事实矛盾：时间点与常识冲突（几点几分的天亮天黑/作息习惯；季节/地区不明时无把握不判）；在场状态冲突（「只有主角一个人」后，同段又出现别人已经到岗/凌晨还在发消息）；动作时序颠倒（先写「走上台」又写「上台前」）；
    c. 比喻意象打架：比喻让读者先想到另一件事（用食物充饥意象写情绪，读成「吃撑了」）；
    d. 病句错字：语序/成分残缺/搭配不当/指代错乱/标点断错造成歧义、同音混用、的得地误用。
-6. 红线标签（对照 craft-canon.md，每条标「有」或「无」；标「有」必须贴原句与位置，并说明为什么构成该红线；任一「有」随四维评分一起提交给作者判断，不单独打回）：
+6. 红线标签（每条标「有」或「无」；标「有」必须贴原句与位置，并说明为什么构成该红线；任一「有」随四维评分一起提交给作者判断，不单独打回）：
    a. 机械降神：本章困境是否由前文未铺垫的新人物/新能力/偶然事件解决？
    b. 无后果：角色惹祸/冲突/胜利是否没有留下任何后果？
    c. 崩人设：角色行为是否违背人物卡底线/一贯性格且无动机支撑？（人物卡在 characters/{角色名}.md，未提供时跳过）
@@ -104,23 +106,61 @@ def material(root: Path, chapter: int) -> str:
         recent = _recent_from_context(root)
     speed = "\n".join(recent) if recent else "（无前文，这是全书第 1 章）"
 
+    import re as _re
+    body = _re.sub(r"<!--[\s\S]*?-->", "", body)  # 剥 HTML 创作标注，保持冷读上下文干净
+
     return (
-        f"正文开头 300 字：\n{body[:300]}\n\n"
+        f"正文开头 500 字：\n{body[:500]}\n\n"
         f"章末 300 字：\n{body[-300:]}\n\n"
         f"前情速记：\n{speed}\n\n"
         f"{COLD_READ_PROMPT}"
     )
 
 
+def _blueprint_section(root: Path, chapter: int) -> str:
+    """蓝图兑现复盘材料（主线程填，冷读子代理不读）：spec 的目标/关键事件行。
+
+    复盘与冷读分离是刻意的：冷读必须干净上下文，蓝图预期由主线程事后对照。"""
+    spec_path = root / f"chapters/chapter-{chapter:03d}/spec.md"
+    if not spec_path.exists():
+        return ""
+    try:
+        spec = spec_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    goals = []
+    m = re.search(r"## 大纲要点[^\n]*\n(.*?)(?=\n## |\Z)", spec, flags=re.S)
+    if m:
+        for line in m.group(1).splitlines():
+            line = line.strip().lstrip("-").strip()
+            if line and not line.endswith("：") and not line.endswith(":"):
+                goals.append(re.sub(r"^\[[ xX]\]\s*", "", line))
+    if not goals:
+        return ""
+    rows = "\n".join(f"- {g}" for g in goals)
+    return (
+        "\n## 蓝图兑现复盘（主线程填，冷读者跳过本节）\n\n"
+        "对照本章蓝图承诺逐条判定（done=兑现且力度够 / thin=写到但敷衍 / miss=未兑现）：\n"
+        f"{rows}\n\n"
+        "- 人物卡对照（主线程）：出场核心角色的行为撞卡上底线/优缺点吗？\n"
+        "- 复盘结论：\n"
+    )
+
+
 def write_review(root: Path, chapter: int, force: bool = False) -> Path:
     p = root / f"chapters/chapter-{chapter:03d}/review.md"
-    if not force and p.exists() and ("评分：" in p.read_text(encoding="utf-8") or "均分" in p.read_text(encoding="utf-8")):
+    if not force and p.exists() and (re.search(r"评分：\s*\d", p.read_text(encoding="utf-8")) or "均分" in p.read_text(encoding="utf-8")):
         print(f"⚠️ {p} 已有评分，跳过重写（重跑不冲掉子代理已填内容；改稿后重读加 --force 刷新正文切片）")
         return p
+    body = read_text(root / f"chapters/chapter-{chapter:03d}/draft.md")
+    # 正文指纹：skip revise 时核对 review 材料与当前 draft 一致，防「改稿后拿旧评分过关」
+    body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
     content = (
         f"# 第 {chapter} 章冷读报告\n\n"
-        f"> 冷读方式：独立子代理（本文件由 coldread_material.py 生成，材料为原文切片）\n\n"
+        f"> 冷读方式：独立子代理（本文件由 coldread_material.py 生成，材料为原文切片）\n"
+        f"<!-- draft-hash:{body_hash} -->\n\n"
         f"{material(root, chapter)}\n"
+        f"{_blueprint_section(root, chapter)}"
     )
     p.write_text(content, encoding="utf-8")
     return p
