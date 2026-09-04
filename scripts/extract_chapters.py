@@ -161,10 +161,14 @@ def main() -> int:
     if args.output:
         out = args.output
         block = ["", "## 章节边界（extract_chapters.py 生成，Stage 1/2/6 唯一切片真值）", ""]
-        block.append("| 章号 | 起始行 | 标题 |")
-        block.append("|---|---|---|")
-        for e in main:
-            block.append(f"| {e['chapter']} | {e['line']} | {e['title']} |")
+        block.append("| 章号 | 起始行 | 字数 | 标题 |")
+        block.append("|---|---|---|---|")
+        lines_all = text.splitlines()
+        for i, e in enumerate(main):
+            end_line = main[i + 1]["line"] - 1 if i + 1 < len(main) else len(lines_all)
+            chapter_text = "\n".join(lines_all[e["line"] - 1 : end_line])
+            words = sum(1 for c in chapter_text if "\u4e00" <= c <= "\u9fff")
+            block.append(f"| {e['chapter']} | {e['line']} | {words} | {e['title']} |")
         if side:
             block.append("")
             block.append("非正文标题（不入章号序列）：")

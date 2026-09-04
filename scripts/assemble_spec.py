@@ -60,7 +60,11 @@ def playbook_reminders(root: Path) -> list[str]:
         return []
     text = pb.read_text(encoding="utf-8")
     out = []
-    for section, label in (("文风技法", "技法库·最近经验"), ("问题", "技法库·避开")):
+    for section, label in (
+        ("妙处", "技法库·可复用妙处"),
+        ("文风技法", "技法库·最近经验"),
+        ("问题", "技法库·避开"),
+    ):
         m = re.search(rf"^## {section}\n(.*?)(?=^## |\Z)", text, flags=re.MULTILINE | re.DOTALL)
         if not m:
             continue
