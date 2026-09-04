@@ -3,7 +3,6 @@ name: novel-outline
 description: |
   小说大纲：三维人物盘点 → 建人物卡 → 写 outline.md（总纲/章纲/结构/情绪/伏笔/概念预算）。novel-writer 流水线第 2 步。
   触发词：写大纲、列章纲、规划结构、设计伏笔、剧情爆破、太平了、不够炸、来点狠的、上强度、Save the Cat、15 节拍。
-  依赖：pipeline.py gate outline / advance outline。
 ---
 
 # novel-outline · 大纲（第 2 步）
@@ -40,7 +39,7 @@ agent 逐格填决策列：**建详卡**（与主角/详卡有直接关系网）
 - 关系行：`与{角色}：关系类型｜张力 1-5｜秘密（无则写「无」）｜现状一句话`
 - 个人故事四件套：出身与来处 / 关键转折 / 未了的执念 / 独处时的样子
 
-**简卡**（模板 `character-card-simple.md`）必填：基本信息（含一句话功能+标签）/ 与详卡的关系（≥1 条）/ 优缺点速记一行（最突出的优点与代价 + 最危险的缺点与触发器）。
+**简卡**（模板 `.novel/templates/character-card-simple.md`）必填：基本信息（含一句话功能+标签）/ 与详卡的关系（≥1 条）/ 优缺点速记一行（最突出的优点与代价 + 最危险的缺点与触发器）。
 
 通用纪律：
 - 卡只记**静态不变量**；当前伤势/位置/心情归 tracking 快照，不进卡
@@ -77,6 +76,8 @@ python3 {SKILL_DIR}/scripts/scaffold_outline.py --project {书目录}
 ```
 pipeline.py advance outline    # G6 校验：章节条目/伏笔规划/概念预算/人物卡字段/盘点决策列
 ```
+
+outline 完成 → 回到根 SKILL.md 入口跑 status，路由到 novel-draft（只要大纲不写正文到这里即可停止，status 会一直提示 draft pending，属正常）。
 
 ## 失败分支
 

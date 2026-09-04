@@ -78,6 +78,10 @@ python3 {SKILL_DIR}/scripts/learn.py list --scope author   # 查看技法库
 
 写入 `.novel/writing-playbook.md`（作者级，跨书复用；下本书的 spec 会自动带提醒）。不删除旧记录，仅追加。
 
+## 流程衔接
+
+沉淀后回到之前的写作步骤；novel-archive 第 3 步的「模式沉淀」每章都会调用本支线。
+
 ## 约束
 
 - 不删除旧记录，仅追加。

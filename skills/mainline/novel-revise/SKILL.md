@@ -3,7 +3,6 @@ name: novel-revise
 description: |
   修改：按冷读意见修改正文；或主动修订大纲（换地图/砍支线/人物下线）。novel-writer 流水线第 4 步（冷读打回才走，否则 skip）。
   触发词：改一下第X章、改稿、修改、返修、改大纲、大纲要调、换地图、砍支线、人物下线、剧情调整。
-  依赖：pipeline.py gate revise / advance revise、outline_revise.py。
 ---
 
 # novel-revise · 修改（第 4 步，条件触发）
@@ -36,6 +35,20 @@ pipeline.py advance revise
 ```
 
 改完回冷读重审：仍打回继续改；通过 → `pipeline.py skip revise` 进 archive。
+
+## 历史章修订（修订非当前章）
+
+用户要求重写/修订**已归档的历史章**（如「前 10 章设定改了，重写第 3 章」）时：
+
+1. 确保该章 spec 存在（无则按 novel-draft 开章流程补建）
+2. `gen_transaction.py commit --revision --chapter N` 生成该章 revision 事务（N ≤ 账本最后提交章）
+3. 填事务、提交、重写 draft、重跑该章 checks 与冷读
+
+**设计约束（账本章号连续性）**：已归档章的**章号不可合并/重排**（append 强制 last+1，合并会导致账本永久卡死）。叙事上的「两章合并」用 revision 重写实现——两章都保留，内容合并进前一章、后一章重写为过渡。
+
+## 扩写与字数上限
+
+「扩写到 3000 字」类请求：若目标超平台硬上限（130%），字数闸门会硬拦且无覆盖通道——设计立场是「超限即分章」。向用户说明并建议分章，不绕闸。
 
 ## 大纲修订模式（主动触发）
 

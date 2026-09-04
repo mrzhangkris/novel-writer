@@ -104,6 +104,8 @@
 - `delta.result` ≤480 字节；`constraints` 只收字符串
 - 替换/删除 `continuity_risks` 旧条目必须把原文逐字放进 `delta.retired_context_items`
 - `rule_overrides` 同章最多 3 条；未登记的硬规则突破会被 G3 拒收
+- 改书名：`tracking_commit.py rename --project . --title 新书名`（book_title 的合法修改入口；concept.md 同步手动改）
+- 历史章修订：`gen_transaction.py commit --revision --chapter N`（N ≤ 账本最后提交章；协议允许，工具已支持）
 - ID 格式：伏笔 `F` + 三位数字（F001）；时间线 `E` 开头同理。delta 总字节 >1536 会有体积警告（长期超标请精简）
 - `reveal_status` 为「部分揭示/已揭示」时 `reveal_chapter` 必填
 - **新增伏笔（账本中无此 ID）必须填 `planned_resolution_chapter`**，否则 G3 拒收（强制回收计划）

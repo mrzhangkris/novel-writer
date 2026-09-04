@@ -70,7 +70,7 @@ BANNED_TEMPLATE = """# Banned words & personal taboos (one per line; # starts a 
 
 ACTIVE_TEMPLATE = """# 当前书（Active）
 
-> 写作入口：记录当前正在写哪本书。切换书时更新本文件（或重新跑 new.py）。
+> 当前书备忘（供人查阅；脚本按运行目录定位项目——写哪本书就 cd 进哪本书的目录）。切书时更新本行或重跑 book_init.py。
 
 - slug:
 - 书名:
@@ -176,8 +176,8 @@ def main():
     if skipped:
         print(f"  跳过：{'、'.join(skipped)}")
     print()
-    print("下一步：开新书用 new.py，例如：")
-    print('  python3 scripts/new.py my-novel --title "我的小说" --genre 悬疑')
+    print("下一步：开新书用 book_init.py（定方向完成后），例如：")
+    print('  python3 scripts/book_init.py --root-dir . --slug my-novel --title "我的小说" --genre 悬疑')
     return 0
 
 

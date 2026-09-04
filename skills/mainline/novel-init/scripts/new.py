@@ -90,12 +90,16 @@ def fill_concept(path, title, genre):
 
 
 def update_active(active_path, slug, title, genre):
-    """把当前书登记到 .novel/active.md。"""
+    """把当前书登记到 .novel/active.md（多书切换时更新当前书登记，打印提示不静默）。"""
     try:
         with open(active_path, "r", encoding="utf-8-sig") as f:
             text = f.read()
     except OSError:
         return
+    m = re.search(r"^- slug:\s*(.+)$", text, flags=re.MULTILINE)
+    if m and m.group(1).strip() != slug:
+        print(f"  ℹ️ active.md 当前书已从「{m.group(1).strip()}」切换为「{slug}」"
+              "（多书并行时注意：脚本按运行目录定位项目，切书写作用 cd 到对应书目录）")
     text = re.sub(r"^- slug:.*$", f"- slug: {slug}", text, count=1, flags=re.MULTILINE)
     text = re.sub(
         r"^- 书名:.*$", f"- 书名: {title or slug}", text, count=1, flags=re.MULTILINE

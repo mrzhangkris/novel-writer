@@ -194,7 +194,7 @@ def _foreshadow_candidates(root: Path, chapter: int, state: dict) -> list[dict]:
     return out
 
 
-def gen_commit(root: Path, pipe: dict, revision: bool) -> dict:
+def gen_commit(root: Path, pipe: dict, revision: bool, chapter_override: int | None = None) -> dict:
     state_path = root / STATE_FILE
     if not state_path.exists():
         print("❌ 状态账本未初始化（tracking/_tracking-state.json 不存在）")
@@ -208,6 +208,14 @@ def gen_commit(root: Path, pipe: dict, revision: bool) -> dict:
     last = state["last_committed_chapter"]
     revision_no = state["state_revision"]
     chapter = int(pipe.get("chapter", 1))
+
+    if revision and chapter_override is not None:
+        # 历史章修订：显式指定已写章号（如「前 10 章设定改了，重写第 3 章」）。
+        # 协议层允许 revision chapter <= last（schema 校验），工具层此前只为当前章生成。
+        if not (1 <= chapter_override <= last):
+            print(f"❌ --chapter {chapter_override} 超出可修订范围（1-{last}）")
+            raise SystemExit(2)
+        chapter = chapter_override
 
     if revision:
         if chapter > last:
@@ -288,6 +296,10 @@ def main() -> int:
     sub.choices["commit"].add_argument(
         "--revision", action="store_true", help="生成 revision 事务（修订已写章节）"
     )
+    sub.choices["commit"].add_argument(
+        "--chapter", type=int, default=None,
+        help="revision 时指定历史章号（默认当前章；配合 --revision 修订任意已写章，该章 spec 需存在）"
+    )
     args = parser.parse_args()
 
     root = args.project
@@ -303,7 +315,7 @@ def main() -> int:
         tx = gen_init(root, pipe)
         out = root / STORY_DIR / "tx-init.json"
     else:
-        tx = gen_commit(root, pipe, args.revision)
+        tx = gen_commit(root, pipe, args.revision, args.chapter)
         out = root / STORY_DIR / f"tx-chapter-{tx['chapter']:03d}.json"
 
     payload = json.dumps(tx, ensure_ascii=False, indent=2)

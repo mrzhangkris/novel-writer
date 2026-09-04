@@ -3,7 +3,6 @@ name: novel-archive
 description: |
   归档：一致性校验 → 归档本章 → 模式沉淀 → 进下一章。novel-writer 流水线第 5 步。
   触发词：归档、本章完成、验收、进下一章。
-  依赖：pipeline.py gate archive / advance archive / next-chapter、tracking_commit.py check。
 ---
 
 # novel-archive · 归档（第 5 步）
@@ -57,6 +56,8 @@ python3 {SKILL_DIR}/scripts/learn.py add "<提炼后的写法>" --pattern-type {
 ```
 pipeline.py next-chapter    # 重置 draft/revise/archive，章节号 +1
 ```
+
+next-chapter 后 → 回到根 SKILL.md 入口跑 status，路由回 novel-draft 写下一章（书完跑 book_finish.py 收尾）。
 
 ### 5. 全书收尾（仅最后一章）
 

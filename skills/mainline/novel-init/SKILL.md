@@ -2,7 +2,7 @@
 name: novel-init
 description: |
   小说初始化：扫描目录 → 建作者工作区骨架 → 对话式定方向（9 问）→ 书级建目录。novel-writer 流水线第 1 步。
-  触发词：开新书、初始化、新建小说、建小说项目、准备写书。
+  触发词：开新书、初始化、新建小说、建小说项目、准备写书、导入旧书继续写（存量书导入见「扫描目录」的存量素材分支——大篇幅旧书推荐先用 story-long-analyze 拆书吸收，再新开项目）。
 ---
 
 # novel-init · 初始化（第 1 步）
@@ -86,6 +86,8 @@ pipeline.py advance setup
 ```
 python3 {SKILL_DIR}/skills/mainline/novel-init/scripts/validate.py --root-dir {根目录} --book my-book
 ```
+
+init 完成 → 回到根 SKILL.md 入口跑 status，路由到 novel-outline。
 
 ## 失败分支
 

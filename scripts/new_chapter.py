@@ -11,7 +11,6 @@
 """
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -96,7 +95,7 @@ def main():
         return 1
 
     # 章号防呆：必须与状态机的当前章节一致，防止「建了 N+1 章却校验了 N 章」
-    root = find_project_root(Path(args.root_dir), child=PIPELINE_FILE)
+    root = find_project_root(Path(args.root_dir))
     current = None
     if root is not None:
         pipe = read_json(root / PIPELINE_FILE)
@@ -114,7 +113,9 @@ def main():
         )
         return 1
 
-    chapter_dir = os.path.join(args.root_dir, "chapters", f"chapter-{args.chapter:03d}")
+    # 落盘与校验同源：优先用冒泡定位到的项目根（防止从子目录运行时「校验一处、落盘另一处」）
+    target_root = str(root) if root is not None else args.root_dir
+    chapter_dir = os.path.join(target_root, "chapters", f"chapter-{args.chapter:03d}")
     spec_path = os.path.join(chapter_dir, "spec.md")
 
     os.makedirs(chapter_dir, exist_ok=True)

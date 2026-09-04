@@ -8,6 +8,8 @@ CLI 薄壳：文件 I/O、命令入口与「先渲染后提交」的落盘顺序
 
 from __future__ import annotations
 
+from typing import Any
+
 import argparse
 import json
 import os
@@ -342,6 +344,13 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="book project root containing tracking/",
     )
+    rename_parser = subparsers.add_parser(
+        "rename", help="改书名（账本 book_title 字段的合法修改入口，避免手改账本）"
+    )
+    rename_parser.add_argument(
+        "--project", type=Path, required=True, help="book project root containing tracking/"
+    )
+    rename_parser.add_argument("--title", required=True, help="新书名")
     return parser
 
 def main() -> int:
@@ -352,6 +361,20 @@ def main() -> int:
         elif args.command == "commit":
             result = apply_transaction(args.project, read_json(args.input))
             _archive_tx_after_commit(args.project, args.input)
+        elif args.command == "rename":
+            state_path = args.project / "tracking" / "_tracking-state.json"
+            state = read_json(state_path)
+            if not isinstance(state, dict):
+                raise TrackingError("账本不可读，无法改名")
+            state["book_title"] = str(args.title).strip()[:240]
+            normalized = normalize_state(state)
+            state_path.write_text(json_payload(normalized), encoding="utf-8")
+            for relative, content in render_views(normalized).items():
+                target = args.project / "tracking" / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+            print(f'✅ 书名已改为「{args.title}」（concept.md 如需同步请手动更新）')
+            return 0
         else:
             result = check_project(args.project)
     except (TrackingError, OSError, UnicodeError) as exc:

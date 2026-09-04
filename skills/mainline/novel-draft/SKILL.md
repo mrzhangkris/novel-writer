@@ -2,8 +2,7 @@
 name: novel-draft
 description: |
   写正文：开章（脚本组装 spec 蓝图）→ 只读 spec 写 draft + 填 CHANGES 事务 → 收尾（门禁 + 冷读）。novel-writer 流水线第 3 步。
-  触发词：写正文、写这一章、写下一章、继续写。
-  依赖：pipeline.py gate draft / advance draft、tracking_commit.py commit / check。
+  触发词：写正文、写这一章、写下一章、继续写、写番外（番外按普通章流程，章纲标注「番外」，走完整门禁）。
 ---
 
 # novel-draft · 写正文（第 3 步）
@@ -76,6 +75,8 @@ python3 {SKILL_DIR}/scripts/chapter_flow.py finish --project {书目录}
 > 选角出场检查是**单向核对**（spec 名单 → 正文是否出现）；反向「正文冒出名单外角色」由 G4 未登记说话人提示兜底（advisory）。
 
 ## 冷读裁判（独立子代理，默认路径）
+
+> 用户明确要求跳过冷读时：先说明冷读防「作者记忆脑补」的设计理由；用户坚持则照办并在 review.md 首行标注「用户要求跳过」（用户主权优先，但须留痕）。
 
 门禁全过后，spawn **干净上下文**的子代理做冷读：只读正文切片 + 前情速记，禁止读任何创作蓝图（防作者记忆脑补）。
 

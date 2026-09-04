@@ -75,6 +75,10 @@ python3 {SKILL_DIR}/scripts/story_query.py --status   # 转发 pipeline.py statu
 
 ---
 
+## 流程衔接
+
+纯查询不改变任何状态；查完回到之前的写作步骤（novel-draft 写作中查询不中断流程）。
+
 ## 边界与失败恢复
 
 | 情况 | 处理 |

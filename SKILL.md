@@ -3,7 +3,7 @@ name: novel-writer
 disable-model-invocation: true
 description: |
   Use when writing novels, web novels, or long-form fiction with structured pipelines.
-  Triggers: write novel, start new book, write web novel, write outline, continue writing, write next chapter, fix chapter X, scan trends, analyze golden chapters, remove AI smell, query settings, polish chapter, fix grammar, archive, complete chapter, accept, proceed to next chapter, plot explosion, too boring, intensify, Save the Cat, 15 beats, story archetype, revise outline, adjust outline, change map, cut subplot, character exit, plot adjustment.
+  Triggers: write novel, start new book, write web novel, write outline, continue writing, write next chapter, fix chapter X, rewrite chapter N, import existing novel, rename book, write side story/extra chapter, scan trends, analyze golden chapters, remove AI smell, query settings, polish chapter, fix grammar, archive, complete chapter, accept, proceed to next chapter, plot explosion, too boring, intensify, Save the Cat, 15 beats, story archetype, revise outline, adjust outline, change map, cut subplot, character exit, plot adjustment.
   NOT for: code implementation review (→ code-review-checklist); skill evaluation and optimization (→ darwin-skill).
 ---
 
@@ -62,7 +62,7 @@ description: |
 
 ## 入口流程（每次固定，不协商）
 
-1. 只跑这一条命令判断状态：
+1. 只跑这一条命令判断状态（`{SKILL_DIR}` = 本技能仓库根，全文同义）：
    ```
    python3 {SKILL_DIR}/scripts/pipeline.py status
    ```
