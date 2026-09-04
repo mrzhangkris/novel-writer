@@ -571,6 +571,57 @@ def cmd_skip(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reopen(args: argparse.Namespace) -> int:
+    """归档或 skip 之后重开 revise（编辑打回、作者事后修订的官方入口）。
+
+    场景：章已 archive（revise=skipped/done），外部编辑/作者事后要求改稿。
+    只重置 revise 为 pending，不动 chapter 与账本；修订走 revision 事务。
+    """
+    if args.step != "revise":
+        print("❌ 仅 revise 可重开")
+        return 1
+    root = find_project_root(Path.cwd())
+    if root is None:
+        print("❌ 不在项目中")
+        return 1
+    state = load_state(root)
+    if state["steps"]["revise"] == "pending":
+        print("ℹ️  revise 已是 pending，无需重开")
+        return 0
+    # 章号校验：要修订的章必须已提交进账本（防修订未写章）
+    chapter = int(state.get("chapter") or 1)
+    revised_chapter = int(getattr(args, "chapter", 0) or 0) or chapter - 1
+    ledger_path = root / "tracking" / "_tracking-state.json"
+    if ledger_path.exists():
+        try:
+            import json as _json
+            last = int(
+                _json.loads(ledger_path.read_text(encoding="utf-8")).get(
+                    "last_committed_chapter"
+                )
+                or 0
+            )
+            if revised_chapter > last:
+                print(
+                    f"❌ 第 {revised_chapter} 章事务尚未提交进账本（last={last}），无内容可修订"
+                )
+                return 1
+        except (OSError, ValueError):
+            pass
+    if state["steps"]["revise"] in ("done", "skipped"):
+        state["steps"]["revise"] = "pending"
+        state["steps"]["archive"] = "pending"
+        save_state(root, state)
+        print(
+            f"  ♻️ 第 {revised_chapter} 章 revise 已重开（pending），archive 已回退。"
+            "流程：改 draft → gen_transaction.py commit --revision --chapter "
+            f"{revised_chapter} → tracking_commit.py commit → advance revise → advance archive"
+        )
+        return 0
+    print(f"❌ revise 当前状态为 {state['steps']['revise']}，无法重开")
+    return 1
+
+
 def cmd_fail(args: argparse.Namespace) -> int:
     root = find_project_root(Path.cwd())
     if root is None:
@@ -708,6 +759,18 @@ def main() -> int:
     p_skip_revise = sub.add_parser("skip", help="跳过 revise（冷读通过后）")
     p_skip_revise.add_argument("step", choices=["revise"], help="仅 revise 可跳过")
     p_skip_revise.set_defaults(func=cmd_skip)
+
+    p_reopen = sub.add_parser(
+        "reopen", help="归档/skip 之后重开 revise（编辑打回、事后修订的官方入口）"
+    )
+    p_reopen.add_argument("step", choices=["revise"], help="仅 revise 可重开")
+    p_reopen.add_argument(
+        "--chapter",
+        type=int,
+        default=None,
+        help="要修订的章号（默认最后提交的章）；仅校验用，不改 pipeline 当前章",
+    )
+    p_reopen.set_defaults(func=cmd_reopen)
 
     p_fail = sub.add_parser(
         "fail", help="记录一次修复失败（3 次触发重写，3 轮触发失败章）"
