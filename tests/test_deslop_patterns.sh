@@ -48,5 +48,53 @@ printf '项目禁用词\n' > "$T/wl.txt"
 out=$(node "$SCRIPT" --check --whitelist "$T/wl.txt" --extra-words "$T/extra-words.txt" "$T/extra.txt")
 [ -z "$out" ] || { note "✗ 白名单豁免失效：$out"; fail=1; }
 
+# ---- 8-12. M3 指纹新规则（2026-09：时间戳段/一拍词/他没X/引号混用/micro-action 收紧）----
+# 8. 时间戳转场段（≥4 处独立「HH:MM。」→ advisory；3 处不报）
+printf '18:30。\n他推开酒馆的门。\n\n19:00。\n雨还没停。\n\n19:30。\n他数着盘子里的花生。\n\n20:00。\n街口的灯灭了。\n' > "$T/ts.txt"
+out=$(node "$SCRIPT" --check --fail-on=blocking "$T/ts.txt")
+echo "$out" | grep -q 'timestamp-para-tic' || { note "✗ 时间戳转场段未命中"; fail=1; }
+printf '18:30。\n他推开酒馆的门，雨丝斜着打下来，街口的灯一盏一盏灭下去。\n' > "$T/ts-neg.txt"
+out=$(node "$SCRIPT" --check --fail-on=blocking "$T/ts-neg.txt")
+echo "$out" | grep -q 'timestamp-para-tic' && { note "✗ 时间戳单处误报"; fail=1; }
+
+# 9. 一拍节拍词（≥2 处 → advisory；1 处不报；台词内不计数）
+printf '他的手指在名字上停了一拍。\n\n她顿了半拍，才接过信。\n\n他把信折好，放进内兜。\n' > "$T/beat.txt"
+out=$(node "$SCRIPT" --check --fail-on=blocking "$T/beat.txt")
+echo "$out" | grep -q 'beat-pause-tic' || { note "✗ 一拍节拍词未命中"; fail=1; }
+printf '「他顿了一拍才说话。」她转述道。\n\n他接过信，拆开，只有一行字。\n' > "$T/beat-neg.txt"
+out=$(node "$SCRIPT" --check --fail-on=blocking "$T/beat-neg.txt")
+echo "$out" | grep -q 'beat-pause-tic' && { note "✗ 台词内一拍被误计"; fail=1; }
+
+# 10. 「他没X」否定短句起手（段首 ≥3 处 → advisory；句中转述不收）
+printf '他没开灯。\n\n他没睡。\n\n他没回头。\n\n夜风卷着窗帘。\n' > "$T/negshort.txt"
+out=$(node "$SCRIPT" --check --fail-on=blocking "$T/negshort.txt")
+echo "$out" | grep -q 'negation-short-tic' || { note "✗ 他没X否定短句未命中"; fail=1; }
+printf '他说他没吃饭。\n\n他没说话，只是把杯子推过去，玻璃在桌面上划出一道很长的水痕。\n' > "$T/negshort-neg.txt"
+out=$(node "$SCRIPT" --check --fail-on=blocking "$T/negshort-neg.txt")
+echo "$out" | grep -q 'negation-short-tic' && { note "✗ 句中他没X被误收"; fail=1; }
+
+# 11. 章内引号体系混用（英式与直角对话各 ≥3 处 → advisory；单体系不报）
+printf '他说"我明天就走"。\n她说"路上小心"。\n他答"放心"。\n「信我烧了。」她说。\n「烧了？」\n「烧了。」\n' > "$T/qmix.txt"
+out=$(node "$SCRIPT" --check --fail-on=blocking "$T/qmix.txt")
+echo "$out" | grep -q 'quote-mix-tic' || { note "✗ 引号体系混用未命中"; fail=1; }
+printf '「信我烧了。」她说。\n「烧了？」他问。\n「烧了。」\n「什么时候？」\n' > "$T/qmix-neg.txt"
+out=$(node "$SCRIPT" --check --fail-on=blocking "$T/qmix-neg.txt")
+echo "$out" | grep -q 'quote-mix-tic' && { note "✗ 纯直角引号误报混用"; fail=1; }
+
+# 12. micro-action 阈值 6.0→4.0/千字收紧（构造 4.0-6.0 区间密度：旧阈值漏检、新阈值命中）
+python3 - "$T/micro.txt" <<'PY'
+import sys
+plain = "他沿着河堤往上游走，风把成片的芦苇压得很低，水面上一片碎光跟着晃动，对岸有人喊了什么，声音散在风里听不真切。"
+hit = "他停下来看了一眼远处的渡口。"
+paras = [plain] * 25
+for i in (2, 7, 12, 17, 22):
+    paras[i] = hit
+open(sys.argv[1], "w", encoding="utf-8").write("\n\n".join(paras) + "\n")
+PY
+out=$(node "$SCRIPT" --check --fail-on=blocking "$T/micro.txt")
+echo "$out" | grep -q 'micro-action-tic' || { note "✗ micro-action 4.0-6.0/千字区间未命中（阈值收紧未生效）"; fail=1; }
+density=$(echo "$out" | grep -o '[0-9.]*\/千字' | head -1 | cut -d/ -f1)
+python3 -c "assert 4.0 <= float('$density') < 6.0, '密度 $density 不在 4.0-6.0 区间'" || { note "✗ micro-action 测试密度区间构造失效"; fail=1; }
+
 [ $fail -eq 0 ] && echo "✓ deslop 检测器回归通过（正例命中/负例不误伤/BOM 豁免）" || echo "✗ deslop 检测器回归失败"
 exit $fail

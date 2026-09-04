@@ -35,7 +35,8 @@
     "plot_points":  ["本章推进/新增的情节点（≤8 条）"],
     "foreshadow_changes": [{"action": "upsert|delete", "id": "F027（三位格式 F\\d{3}）", "summary": "…",
                       "planted_chapter": 10, "planned_resolution_chapter": 15,
-                      "status": "已埋|已回收|已过期|放弃", "importance": "高|中|低"}],
+                      "status": "已埋|推进|已回收|已过期|放弃", "importance": "高|中|低",
+                      "progress_note": "可选，「推进」态的进度注记（推进到哪里/还差什么，≤360 字节；缺省=清除旧注记）"}],
     "timeline_events": [{"action": "upsert|delete", "id": "E001",
                       "story_time": "…", "objective_fact": "客观事实",
                       "reader_knowledge": "读者此刻知道的", "characters": ["涉及角色"],
@@ -74,7 +75,7 @@
 |---|---|---|
 | 角色状态 | `character_changes[].change` + 快照 `location`/`alive` | 死者移动（死亡铁律：已死者 location 变化即拒收；置 `alive:false` 必须有明确死亡宣告） |
 | 情节/冲突 | `plot_points` | 冲突悬空不推进 |
-| 伏笔 | `foreshadow_changes`（状态机：已埋→推进→已回收/已过期/放弃；「推进」=引信落地未全兑现，不计入 Claremont 堆积） | 埋而不收、收而不埋；已回收的悬念进 spec 反向提示「严禁重复写」 |
+| 伏笔 | `foreshadow_changes`（状态机：已埋→推进→已回收/已过期/放弃；「推进」=引信落地未全兑现，不计入 Claremont 堆积，用可选 `progress_note` 记进度——推进到哪里、还差什么；spec 组装时推进态伏笔附带显示注记） | 埋而不收、收而不埋；已回收的悬念进 spec 反向提示「严禁重复写」 |
 | 时间线（双视图） | `timeline_events[].{objective_fact,reader_knowledge}` | 作者视角泄露（读者不该知道的提前知道） |
 | 道具 | `items[].{holder}` | 道具分身、凭空易手 |
 | 秘密 | `secrets[].{known_by,revealed}` | 秘密对不知情者泄露 |

@@ -12,6 +12,9 @@
               由 pipeline 记录连续计数：连续 3 章落在同一软区 → 升级硬拦截。
   deai        去 AI 味，调用 check-ai-patterns.js（oh-story 成熟检测，20+ 类 AI 模式）
   verify      一致性，调用 tracking_commit.py check
+  exempt      检查豁免清单管理：exempt <type> <key> --reason "…"/exempt list，
+              记入 .story/exemptions.json（{type, key, reason, date}），
+              供 outline_revise 等比对类检查跳过人工确认过的假冲突
 
 两种调用方式：
   checks.py draft                pipeline 用：校验当前章草稿（wordcount + deai + 趋势）
@@ -30,7 +33,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _common import STORY_DIR, find_project_root
+from _common import EXEMPTIONS_FILE, STORY_DIR, find_project_root
 from check_engine import load_rules, run_count_rule, run_rules
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -670,6 +673,50 @@ def cmd_world_rules_advisory(draft_path: Path) -> int:
     return 0
 
 
+def cmd_exempt(type_: str, key: str | None, reason: str | None) -> int:
+    """检查豁免清单管理（.story/exemptions.json，条目格式 {type, key, reason, date}）。
+
+    文本比对类检查（outline_revise 等）对「文字不同但实质一致」的条目存在假冲突，
+    人工比对确认无冲突后记入豁免清单，比对方命中该 key 即不再报：
+      checks.py exempt outline-revise chapter-goal:5 --reason "措辞不同，实质一致"
+      checks.py exempt list
+    reason 必填：无理由的豁免是坏账，日后无法审计当初为何放行。
+    """
+    root = find_project_root(Path.cwd())
+    if root is None:
+        print("❌ 不在项目中")
+        return 1
+    path = root / EXEMPTIONS_FILE
+    try:
+        items = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    except (OSError, json.JSONDecodeError):
+        print(f"⚠️  豁免清单损坏：{path}——先修复或删除该文件再操作")
+        return 1
+    if not isinstance(items, list):
+        print(f"⚠️  豁免清单格式错误（应为数组）：{path}")
+        return 1
+    if type_ == "list":
+        if not items:
+            print("（豁免清单为空）")
+            return 0
+        for it in items:
+            print(f"- [{it.get('type', '?')}] {it.get('key', '?')}｜{it.get('date', '?')}｜{it.get('reason', '')}")
+        return 0
+    if not key or not reason:
+        print('用法：checks.py exempt <type> <key> --reason "人工复核理由"；或 checks.py exempt list')
+        return 1
+    dup = next((it for it in items if it.get("type") == type_ and it.get("key") == key), None)
+    if dup:
+        print(f"⚠️  已存在同 key 豁免：[{type_}] {key}（{dup.get('reason', '')}），未重复添加")
+        return 0
+    from datetime import date
+    items.append({"type": type_, "key": key, "reason": reason, "date": date.today().isoformat()})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"✅ 已豁免：[{type_}] {key}——比对方检查命中该条时不再报")
+    return 0
+
+
 def cmd_verify() -> int:
     root = find_project_root(Path.cwd())
     if root is None:
@@ -882,6 +929,12 @@ def main() -> int:
 
     p_verify = sub.add_parser("verify", help="一致性校验")
     p_verify.set_defaults(func=lambda a: cmd_verify())
+
+    p_exempt = sub.add_parser("exempt", help="检查豁免清单管理（list / 添加）")
+    p_exempt.add_argument("type", help="检查类型（如 outline-revise），或 list 列出全部")
+    p_exempt.add_argument("key", nargs="?", default=None, help="冲突条目 key（list 时省略）")
+    p_exempt.add_argument("--reason", default=None, help="人工复核理由（添加时必填）")
+    p_exempt.set_defaults(func=lambda a: cmd_exempt(a.type, a.key, a.reason))
 
     a = parser.parse_args(args)
     return a.func(a)

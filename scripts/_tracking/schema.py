@@ -307,6 +307,7 @@ def normalize_foreshadow_change(
             "planned_resolution_chapter",
             "status",
             "importance",
+            "progress_note",
         },
         label,
     )
@@ -349,6 +350,14 @@ def normalize_foreshadow_change(
         importance in FORESHADOW_IMPORTANCE,
         f"{label}.importance must be one of {FORESHADOW_IMPORTANCE}",
     )
+    # 可选进度注记（「推进」态的进度载体）：缺省 None 表示「本章未更新进度」，
+    # 声明式覆盖旧值——陈旧进度比空进度更误导。
+    raw_progress = row.get("progress_note")
+    progress_note = (
+        None
+        if raw_progress is None
+        else clean_text(raw_progress, f"{label}.progress_note", max_bytes=360)
+    )
     return {
         "action": action,
         "id": identifier,
@@ -357,6 +366,7 @@ def normalize_foreshadow_change(
         "planned_resolution_chapter": planned_chapter,
         "status": status,
         "importance": importance,
+        "progress_note": progress_note,
     }
 
 def normalize_foreshadow_state(
@@ -379,6 +389,7 @@ def normalize_foreshadow_state(
                 "status",
                 "importance",
                 "updated_chapter",
+                "progress_note",
             },
             f"tracking state.foreshadow.{identifier}",
         )

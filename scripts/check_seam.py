@@ -13,6 +13,8 @@
 判定（宁缺毋滥；词表法有噪声，advisory 交人工终判）：
   地点/人物/道具  双侧非空且无交集 → ⚠️ seam-conflict；任一侧空 → 不判
   时间            后章首窗天数 − 前章尾窗天数 ≥ 3 → ⚠️ 时间跳跃
+  降级            地点突变 + 后章首窗含时间跳跃词（次日/X天后/入夜…）→
+                  seam-conflict 从 med 降为 info（疑似有意转场，M3 八章实测降噪）
   仅相邻章（章号差 = 1）对账；只读两章窗口文本，禁止全本扫描。
 
 用法：
@@ -38,6 +40,15 @@ TIME_JUMP_DAYS = 3        # 天数差 ≥ 3 → 时间跳跃 warning
 TITLE_RE = re.compile(r"^第[\d零一二两三四五六七八九十百]+章")
 LOC_SUFFIX_RE = re.compile(r"([\u4e00-\u9fff]{2,4})(里|中|上|内|下)")
 DAY_RE = re.compile(r"第([\d零一二两三四五六七八九十百]+)天")
+
+# 时间跳跃词白名单（M3 八章连载实测：seam-conflict 8 章误报 6+ 次全是「有意转场」，
+# 人工复核疲劳）。后章首窗出现时间跳跃词且地点突变共现时，该条从 med 降为 info
+# 并标注「疑似有意转场」——时间跳跃天然伴随场景切换，是转场的强信号；
+# 无时间跳跃词的地点突变仍保持 med 原判（未知情况不降级）。
+TIME_JUMP_WORDS_RE = re.compile(
+    r"次日|翌日|第二天|[一二两三四五六七八九十百半数几\d]+(?:天|日)后"
+    r"|当晚|入夜|清晨|黄昏|拂晓|翌晨"
+)
 
 # 方位短语核心的尾字黑名单：身体部位/抽象/时间词，压词面噪声（宁缺毋滥）。
 # 注意：核心 ≥2 字已天然滤掉「马上/地上/心里」等单字惯用语。
@@ -222,14 +233,29 @@ def run(project: Path, chapter: int | None, as_json: bool) -> int:
 
     warnings: list[dict] = []
 
-    def judge_dim(dim: str, label: str, prev: set[str], curr: set[str]) -> str:
+    def judge_dim(dim: str, label: str, prev: set[str], curr: set[str],
+                  transitional: bool = False) -> str:
         if not prev or not curr:
             return "unknown"
         if relates(prev, curr):
             return "ok"
+        if transitional:
+            # 时间跳跃词共现：疑似有意转场，降级 info 提示复核，不再按 med 催人工
+            warnings.append({
+                "dim": dim,
+                "type": "seam-conflict",
+                "severity": "info",
+                "message": (
+                    f"seam-conflict（{label}）：前章尾窗「{'、'.join(sorted(prev))}」 vs "
+                    f"后章首窗「{'、'.join(sorted(curr))}」——{label}突变，"
+                    "但首窗含时间跳跃词，疑似有意转场（词表法有噪声，可放行）"
+                ),
+            })
+            return "conflict"
         warnings.append({
             "dim": dim,
             "type": "seam-conflict",
+            "severity": "med",
             "message": (
                 f"seam-conflict（{label}）：前章尾窗「{'、'.join(sorted(prev))}」 vs "
                 f"后章首窗「{'、'.join(sorted(curr))}」——{label}突变，请人工复核"
@@ -238,8 +264,10 @@ def run(project: Path, chapter: int | None, as_json: bool) -> int:
         })
         return "conflict"
 
+    # 时间跳跃白名单只作用于地点维：地点突变 + 首窗时间跳跃词 = 疑似有意转场。
+    time_jump_word = bool(TIME_JUMP_WORDS_RE.search(head_win))
     verdicts = {
-        "location": judge_dim("location", "地点", prev_loc, curr_loc),
+        "location": judge_dim("location", "地点", prev_loc, curr_loc, time_jump_word),
         "characters": judge_dim("characters", "人物", prev_char, curr_char),
         "items": judge_dim("items", "道具", prev_item, curr_item),
     }
@@ -249,6 +277,7 @@ def run(project: Path, chapter: int | None, as_json: bool) -> int:
             warnings.append({
                 "dim": "time",
                 "type": "time-jump",
+                "severity": "med",
                 "message": (
                     f"时间跳跃：前章尾窗最远「第{prev_day}天」 → 后章首窗最远「第{curr_day}天」"
                     f"（相差 {curr_day - prev_day} 天）——若为有意跳时请忽略"
@@ -278,7 +307,7 @@ def run(project: Path, chapter: int | None, as_json: bool) -> int:
     for note in degraded:
         print(f"（{note}）")
     for w in warnings:
-        print(f"⚠️  [med][seam] {w['message']}")
+        print(f"⚠️  [{w.get('severity', 'med')}][seam] {w['message']}")
     if not warnings:
         print("✅ seam 通过：相邻章拼接无断裂（证据不足的维度不判）")
     return 0  # advisory：恒 0，不拦门禁

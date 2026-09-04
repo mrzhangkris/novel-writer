@@ -18,9 +18,10 @@ import argparse
 import re
 from pathlib import Path
 
-from _common import find_project_root, read_json
+from _common import EXEMPTIONS_FILE, find_project_root, read_json
 
 REPORT_FILE = "outline-revision-report.md"
+EXEMPT_TYPE = "outline-revise"
 
 
 def parse_outline_entries(outline: str) -> dict[int, dict[str, str]]:
@@ -90,25 +91,42 @@ def foreshadow_in_outline(fid: str, outline: str) -> bool:
     )
 
 
-def detect_conflicts(root: Path, from_chapter: int) -> list[str]:
+def load_exemptions(root: Path) -> list[dict]:
+    """读豁免清单（.story/exemptions.json，由 checks.py exempt 写入）。
+
+    比对类检查对「文字不同但实质一致」的条目存在假冲突（M3 实测 5 条假冲突
+    一直挂账），人工确认后记豁免，命中即不再报。文件缺失/损坏按空清单处理
+    （豁免是降噪手段，不因清单问题中断修订检查）。"""
+    data = read_json(root / EXEMPTIONS_FILE, default=[])
+    if not isinstance(data, list):
+        return []
+    return [
+        x for x in data
+        if isinstance(x, dict) and x.get("type") == EXEMPT_TYPE and x.get("key")
+    ]
+
+
+def detect_conflicts(root: Path, from_chapter: int) -> list[tuple[str, str]]:
+    """返回 (key, 描述) 列表；key 是稳定豁免锚（checks.py exempt outline-revise <key>）。"""
     outline_path = root / "outline.md"
     if not outline_path.exists():
-        return ["大纲文件不存在"]
+        return [("outline-missing", "大纲文件不存在")]
     outline = outline_path.read_text(encoding="utf-8")
     entries = parse_outline_entries(outline)
     written = parse_written_results(root)
     foreshadows = parse_foreshadow_state(root)
-    conflicts: list[str] = []
+    conflicts: list[tuple[str, str]] = []
 
     # 1. 伏笔对账
     for fid, row in foreshadows.items():
         if from_chapter > 1 and int(row.get("planted_chapter", 0)) < from_chapter:
             continue
         if not foreshadow_in_outline(fid, outline):
-            conflicts.append(
+            conflicts.append((
+                f"foreshadow:{fid}",
                 f"伏笔 {fid}（第{row.get('planted_chapter', '?')}章埋，状态「{row.get('status', '?')}」）"
-                "在新大纲中消失——要么补回新大纲，要么在 revise 时声明废弃"
-            )
+                "在新大纲中消失——要么补回新大纲，要么在 revise 时声明废弃",
+            ))
 
     # 2. 已写章节与新大纲条目矛盾（无法自动判语义矛盾，列出已写章 + 新纲目标题供人工比对）
     for chapter in sorted(written):
@@ -117,10 +135,11 @@ def detect_conflicts(root: Path, from_chapter: int) -> list[str]:
         if chapter in entries:
             goal = entries[chapter].get("本章目标", "")
             if goal:
-                conflicts.append(
+                conflicts.append((
+                    f"chapter-goal:{chapter}",
                     f"第{chapter}章已写（结果：{written[chapter][:40]}…）"
-                    f"vs 新大纲本章目标：{goal[:40]}——人工比对是否冲突"
-                )
+                    f"vs 新大纲本章目标：{goal[:40]}——人工比对是否冲突",
+                ))
 
     # 3. 活跃核心角色 vs 新大纲提及（粗检：角色名在 outline 里出现次数为 0 且有账本快照 → 疑似被大纲抛弃）
     state = read_json(root / "tracking" / "_tracking-state.json")
@@ -128,14 +147,19 @@ def detect_conflicts(root: Path, from_chapter: int) -> list[str]:
         active = state.get("context", {}).get("active_character_names", [])
         for name in active:
             if name not in outline:
-                conflicts.append(
+                conflicts.append((
+                    f"character-missing:{name}",
                     f"活跃核心角色「{name}」在新大纲中未再出现——若已下线，"
-                    "在修订事务中登记退役（retired_characters），否则读者会等他返场"
-                )
+                    "在修订事务中登记退役（retired_characters），否则读者会等他返场",
+                ))
     return conflicts
 
 
-def render_report(conflicts: list[str], from_chapter: int) -> str:
+def render_report(
+    conflicts: list[tuple[str, str]],
+    exempted: list[tuple[str, str]],
+    from_chapter: int,
+) -> str:
     lines = [
         "# 大纲修订冲突报告（outline-revision-report）",
         "",
@@ -147,14 +171,27 @@ def render_report(conflicts: list[str], from_chapter: int) -> str:
     if not conflicts:
         lines.append("✅ 无冲突：新大纲与已写章节/伏笔/角色对账一致，可继续写。")
     else:
-        for i, c in enumerate(conflicts, 1):
-            lines.append(f"{i}. ⚠️ {c}")
+        for i, (key, text) in enumerate(conflicts, 1):
+            lines.append(f"{i}. ⚠️ [{key}] {text}")
     lines.append("")
     lines.append("## 处理动作")
     lines.append("")
-    lines.append("每条冲突二选一：")
+    if conflicts:
+        lines.append("每条冲突二选一：")
     lines.append("- **改大纲**：把冲突条目补回新大纲（伏笔续接、角色返场、章纲保留）")
     lines.append("- **改声明**：在 revise 事务里显式声明废弃（伏笔 delete / 角色退役 / 旧章重写）")
+    if conflicts:
+        lines.append(
+            "- **确认误报**：文字不同但实质一致的条目（人工比对后），记入豁免清单，下次不再报：\n"
+            f"  `python3 scripts/checks.py exempt {EXEMPT_TYPE} <方括号里的key> --reason \"比对说明\"`"
+        )
+    if exempted:
+        shown = [f"[{key}]" for key, _ in exempted]
+        lines.append("")
+        lines.append(
+            f"> 已按豁免清单跳过 {len(exempted)} 条（{EXEMPTIONS_FILE}）：{'、'.join(shown)}"
+            "——复核豁免用 `checks.py exempt list`"
+        )
     lines.append("")
     lines.append("> 修订大纲时同步更新 tracking 账本：伏笔变更走 delta.foreshadow_changes，")
     lines.append("> 角色下线走 delta.retired_characters，不静默丢弃。")
@@ -174,11 +211,18 @@ def main() -> int:
         return 1
 
     conflicts = detect_conflicts(proj, args.from_chapter)
-    report = render_report(conflicts, args.from_chapter)
+    # 豁免过滤：命中清单的假冲突不再报，但报告中留痕（防豁免变成无声丢弃）
+    exempt_keys = {x.get("key") for x in load_exemptions(proj)}
+    active = [c for c in conflicts if c[0] not in exempt_keys]
+    exempted = [c for c in conflicts if c[0] in exempt_keys]
+    report = render_report(active, exempted, args.from_chapter)
     report_path = proj / REPORT_FILE
     report_path.write_text(report, encoding="utf-8")
     print(f"[ok] 报告：{report_path}", flush=True)
-    print(f"     冲突 {len(conflicts)} 条" + ("（无冲突 ✅）" if not conflicts else ""), flush=True)
+    summary = f"     冲突 {len(active)} 条" + ("（无冲突 ✅）" if not active else "")
+    if exempted:
+        summary += f"；按豁免清单跳过 {len(exempted)} 条"
+    print(summary, flush=True)
     return 0
 
 

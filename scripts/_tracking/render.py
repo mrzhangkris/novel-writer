@@ -49,8 +49,10 @@ def render_foreshadow(rows: dict[str, dict[str, Any]], revision: int) -> str:
         "",
         f"> 状态修订：{revision}。每个 ID 只保留一行当前状态；历史变化见 `chapter-deltas/`。",
         "",
-        "| ID | 内容 | 埋设章 | 计划回收章 | 状态 | 重要度 | 最近变更章 |",
-        "|---|---|---:|---:|---|---|---:|",
+        # 进度注记：「推进」态伏笔的进度载体（delta.foreshadow_changes[].progress_note，
+        # assemble_spec 组装 spec 时随「继续推进」指令一并显示）；旧账本无此列数据时显示 —。
+        "| ID | 内容 | 埋设章 | 计划回收章 | 状态 | 重要度 | 最近变更章 | 进度注记 |",
+        "|---|---|---:|---:|---|---|---:|---|",
     ]
     for identifier in sorted(rows):
         row = rows[identifier]
@@ -59,9 +61,10 @@ def render_foreshadow(rows: dict[str, dict[str, Any]], revision: int) -> str:
             if row["planned_resolution_chapter"]
             else "—"
         )
+        progress = row.get("progress_note") or "—"
         lines.append(
             f"| {identifier} | {row['summary']} | 第{row['planted_chapter']}章 | {planned} | "
-            f"{row['status']} | {row['importance']} | 第{row['updated_chapter']}章 |"
+            f"{row['status']} | {row['importance']} | 第{row['updated_chapter']}章 | {progress} |"
         )
     return "\n".join(lines) + "\n"
 

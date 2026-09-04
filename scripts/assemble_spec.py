@@ -147,9 +147,10 @@ def pad_fid(fid: str) -> str:
 
 
 def parse_foreshadow_table(text: str) -> list[dict]:
-    """兼容账本两种表结构（ID 可能 F01 或 F001、列数 5-7）。
+    """兼容账本两种表结构（ID 可能 F01 或 F001、列数 5-8）。
 
     planted/planned 保留原字符串（gen_transaction 用）；*_no 是 int（check_continuity 用）。
+    progress_note 是「推进」态的进度载体（v2 新列，旧表无该列时为空串）。
     """
     rows = []
     for line in text.splitlines():
@@ -159,11 +160,13 @@ def parse_foreshadow_table(text: str) -> list[dict]:
         def num(s):
             mm = re.search(r"\d+", s)
             return int(mm.group()) if mm else 0
+        progress = cells[7] if len(cells) > 7 else ""
         rows.append({
             "id": cells[0], "summary": cells[1],
             "planted": cells[2], "planned": cells[3], "status": cells[4],
             "importance": cells[5] if len(cells) > 5 else "中",
             "planted_no": num(cells[2]), "planned_no": num(cells[3]),
+            "progress_note": "" if progress in ("", "—") else progress,
         })
     return rows
 
@@ -312,7 +315,13 @@ def foreshadow_lines(root: Path, chapter: int, outline_plants: list[str]) -> lis
             elif chapter_in(row["planned"], chapter + 1) or chapter_in(row["planned"], chapter + 2):
                 lines.append(f"- 推进 {row['id']}：临近回收（{row['planned']}），本章为回收铺垫")
         elif row["status"] == "推进":
-            lines.append(f"- 继续推进 {row['id']}：{row['summary'][:40]}（引信已落地，本章保持可见或再推进一步，计划回收 {row['planned']}）")
+            # 进度注记：让「推进」态有进度载体，spec 里与「已埋」有本质区别
+            # （推进到哪里、还差什么）；未填时退回无注记的通用指令。
+            progress = f"，进度：{row['progress_note']}" if row.get("progress_note") else ""
+            lines.append(
+                f"- 继续推进 {row['id']}：{row['summary'][:40]}（引信已落地{progress}，"
+                f"本章保持可见或再推进一步，计划回收 {row['planned']}）"
+            )
         elif row["status"] in ("已回收", "已过期", "放弃"):
             closed.append(f"{row['id']}（{row['summary'][:30]}）")
     lines.extend(outline_plants)

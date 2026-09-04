@@ -15,6 +15,8 @@ STORY_DIR = ".story"
 PIPELINE_FILE = ".story/pipeline.json"
 TREND_FILE = ".story/quality-trend.json"
 MEMORY_FILE = ".story/project_memory.json"
+# 检查豁免清单（人工复核确认的假冲突挂账；写入方 checks.py exempt，消费方各比对类检查）
+EXEMPTIONS_FILE = ".story/exemptions.json"
 
 
 def find_project_root(start: Path, child: str = STORY_DIR) -> Path | None:

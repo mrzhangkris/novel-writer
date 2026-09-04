@@ -28,9 +28,13 @@ Detect high-risk AI-flavor prose patterns that need human rewrite:
   - 预告式总结收尾 (文末窗口 没人知道/才刚刚开始/正朝着…压了过去, 实战漏网句式)
   - 章尾状态总结体 (文末窗口 这一夜注定/这一切都结束了/新的人生才刚刚开始/命运的齿轮)
   - 引号强调滥用 (叙述里 1-4 字短词加引号强调，密度型)
+  - 时间戳转场段 (「18:30。」独立成段 ≥4 处，M3 指纹)
+  - 一拍节拍词 (顿/停了(半)一拍 ≥2 处，M3 指纹)
+  - 「他没X」否定短句起手 (段首 ≥3 处，M3 指纹)
+  - 章内引号体系混用 (英式 "…" 与直角「…」对话同章各 ≥3 处，M3 指纹)
 
 Each finding carries severity: blocking by default for generation/deslop cleanup (not-is-comparison / em-dash / voice-contrast / negation-parade / reverse-not-is / trailer-ending / trailer-summary). This is a local style/readability gate, not an AIGC detector score; functional human text can be marked for review instead of hard-edited for a detector.
-或 advisory (period-stutter / long-paragraph / micro-action-tic / action-list-tic / abstract-summary-tic / cliche-density-tic / metaphor-density-tic / reasoning-chain-tic / system-notice-formality-tic / overcompressed-prose-tic / low-connective-density-tic / quote-emphasis-tic / formulaic-parallelism，是提示，justified 的长推理/氛围段可保留)。
+或 advisory (period-stutter / long-paragraph / micro-action-tic / action-list-tic / abstract-summary-tic / cliche-density-tic / metaphor-density-tic / reasoning-chain-tic / system-notice-formality-tic / overcompressed-prose-tic / low-connective-density-tic / quote-emphasis-tic / formulaic-parallelism / timestamp-para-tic / beat-pause-tic / negation-short-tic / quote-mix-tic，是提示，justified 的长推理/氛围段可保留)。
 --fail-on=blocking 只在出现 blocking finding 时退出 1；默认 --fail-on=all 有任何 finding 即退出 1。
 
 The script reports findings only. It never rewrites text, because the safe fix is
@@ -53,9 +57,11 @@ const LONG_PARAGRAPH_CHARS = 200;
 // 微动作复读：「V了下 / V了一下 / 拍了两下 / 松了半圈」式轻量补语在叙述里高密度复现，
 // 容易形成删减过头的电报体指纹。只扫引号外叙述；密度与次数双门槛同时达标才报，
 // 单次出现是正常中文。
+// 阈值 6.0→4.0/千字（M3 八章实测校准：旧 6.0 只在 c1 命中一次，c6 回潮 13 处 5.09/千
+// 在旧阈值下漏检——微动作是 M3 唯一「先治好又回潮」的指纹，收紧后 c6 可命中）。
 const MICRO_TIC_PATTERN = /了(?:[一两三几半])?[下阵圈道声眼口气会]/g;
 const MICRO_TIC_MIN_HITS = 5;
-const MICRO_TIC_PER_KILO = 6;
+const MICRO_TIC_PER_KILO = 4;
 
 // 监控摄像头式动作清单：同一段连续堆叠通用动作动词（伸手/拿起/取过/挑开/放下/转身等），
 // 且用逗号/顿号串联成步骤表时，读感像无视角温度的监控记录。只做 advisory；
@@ -271,6 +277,36 @@ const TRAILER_SUMMARY_PATTERN = /这一(?:夜|天|刻|战|年|局|役)[，,]?[^�
 const QUOTE_EMPHASIS_MIN_HITS = 3;
 const QUOTE_EMPHASIS_MAX_VISIBLE = 4;
 const QUOTE_EMPHASIS_SPEECH_VERB_PATTERN = /[说道问喊答念叫回吼骂写读唱嘀咕]/;
+
+// ---- M3 指纹吸收（来源：M3 八章实测指纹报告，外卖镇魂 8 章 22145 字；2026-09 校准）----
+// 校准基线：MiniMax-M3 无干预产出 + 真人网文对照；全部 advisory，交人工终判。
+
+// 时间戳转场段：「18:30。」「02:00。」独立成段。M3 八章 0→14 处越写越重
+// （c4:12、c8:14 达标），已固化成默认转场习惯。≥4 处/章报一条（分布指纹）；
+// 单次时间戳转场是正常节奏控制，不逐处报。
+const TIMESTAMP_PARA_PATTERN = /^\d{1,2}:\d{2}[。.]?$/;
+const TIMESTAMP_PARA_MIN_HITS = 4;
+
+// 一拍节拍词：「顿了一拍/停了半拍」。M3 8/8 章必现（14 处，均值 1.75/章），
+// 是「反应模板化」指纹——角色每次接收信息都先停一拍。≥2 处/章报（单次是正常拟态）。
+const BEAT_PAUSE_PATTERN = /[顿停滞慢]了[一半]拍/g;
+const BEAT_PAUSE_MIN_HITS = 2;
+
+// 「他没X」否定短句起手：段首「他没睡。」「他没回头。」。M3 8/8 章必现
+// （全书 35 处，1.58/千字）。限段首（独立短段）——句中「他说他没吃饭」
+// 是正常转述不收；「他没有再贴新的」因后续无句读天然不命中。
+// 阈值 3/章：report 表格计数是全文宽口径（c8:7），按本规则段首口径实测
+// 单章最高 3 处（c3/c7/c8），≥3 恰好命中重灾章、放过 1-2 处的低密度章。
+const NEGATION_SHORT_PATTERN = /^他没[\u4e00-\u9fff]{1,3}[，。]/;
+const NEGATION_SHORT_MIN_HITS = 3;
+
+// 章内引号体系混用：英式引号（"…" / “…”）对话与直角引号「…」对话同章并存
+// （M3 c4 实证：" 37 处 vs 「 22 处，215 行起对话用回英式）。引号体系漂移是
+// 一致性缺陷，方向由人工定（正文该统一哪套），检测只报混用事实。
+// 两侧各 ≥3 处含中文的成对引号才报——单侧偶然一笔（强调引号）不算对话体系。
+const QUOTE_MIX_STRAIGHT_PATTERN = /["“]([^"”\n]{1,80})["”]/g;
+const QUOTE_MIX_CORNER_PATTERN = /「([^」\n]{1,80})」/g;
+const QUOTE_MIX_MIN_HITS = 3;
 
 // 段落起手词重复（unslop para-opener 吸收）：同一连接/时间词在 ≥3 个段落开头重复 → AI 模板腔。
 // 注意不含人称代词（他/她/我 起段是正常叙述），只查连接词与时间副词。
@@ -740,6 +776,10 @@ function scanProsePatterns(proseLines) {
   findings.push(...findReverseNotIs(proseLines));
   findings.push(...findTrailerEnding(proseLines));
   findings.push(...findQuoteEmphasisTic(proseLines));
+  findings.push(...findTimestampParaTic(proseLines));
+  findings.push(...findBeatPauseTic(proseLines));
+  findings.push(...findNegationShortTic(proseLines));
+  findings.push(...findQuoteMixTic(proseLines));
   findings.push(...findPeriodStutter(proseLines));
   findings.push(...findMicroActionTic(proseLines));
   findings.push(...findActionListTic(proseLines));
@@ -1001,6 +1041,135 @@ function findQuoteEmphasisTic(proseLines) {
     severity: 'advisory',
     message: `引号强调滥用：叙述里 1-4 字短词加引号强调 ${hits} 处；只留真正反讽/转述必要的一两处，其余去掉引号直接写，或换成具体动作让读者自己品。`,
     excerpt: compact(samples.join(' ')),
+  }];
+}
+
+// 时间戳转场段（M3 指纹）：「18:30。」独立成段。逐段精确匹配，全文计数报一条。
+function findTimestampParaTic(proseLines) {
+  let hits = 0;
+  let firstLine = null;
+  const samples = [];
+
+  for (const { text, lineNo } of proseLines) {
+    const trimmed = text.trim();
+    if (!trimmed || isDivider(trimmed) || isStructural(trimmed)) continue;
+    if (TIMESTAMP_PARA_PATTERN.test(trimmed)) {
+      hits += 1;
+      if (firstLine === null) firstLine = lineNo;
+      if (samples.length < 6 && !samples.includes(trimmed)) samples.push(trimmed);
+    }
+  }
+
+  if (hits < TIMESTAMP_PARA_MIN_HITS) return [];
+
+  return [{
+    line: firstLine,
+    column: 1,
+    type: 'timestamp-para-tic',
+    severity: 'advisory',
+    message: `时间戳转场段：整段只有「HH:MM」${hits} 处；时间戳转场固化成默认习惯后场景切换全靠它，改为用一个具体动作/光线/环境变化交代时间流逝，整章最多留一两处真需要精确报时的（倒计时/作息梗）。`,
+    excerpt: compact(samples.join(' ')),
+  }];
+}
+
+// 一拍节拍词（M3 指纹）：「顿了一拍/停了半拍」。全文计数报一条。
+function findBeatPauseTic(proseLines) {
+  let hits = 0;
+  let firstLine = null;
+  const samples = [];
+
+  for (const { text, lineNo } of proseLines) {
+    const trimmed = text.trim();
+    if (!trimmed || isDivider(trimmed) || isStructural(trimmed)) continue;
+    const masked = maskQuoted(text);
+    BEAT_PAUSE_PATTERN.lastIndex = 0;
+    let match;
+    while ((match = BEAT_PAUSE_PATTERN.exec(masked)) !== null) {
+      hits += 1;
+      if (firstLine === null) firstLine = lineNo;
+      if (samples.length < 6 && !samples.includes(match[0])) samples.push(match[0]);
+    }
+  }
+
+  if (hits < BEAT_PAUSE_MIN_HITS) return [];
+
+  return [{
+    line: firstLine,
+    column: 1,
+    type: 'beat-pause-tic',
+    severity: 'advisory',
+    message: `一拍节拍词：「顿/停了(半)一拍」${hits} 处；角色每次接收信息都先停一拍是反应模板化指纹，换具体的失神内容（手指停在哪、目光落在哪）或直接写下一个动作，别都用同一个「拍」。`,
+    excerpt: compact(samples.join(' ')),
+  }];
+}
+
+// 「他没X」否定短句起手（M3 指纹）：段首「他没睡。」「他没回头。」。全文计数报一条。
+function findNegationShortTic(proseLines) {
+  let hits = 0;
+  let firstLine = null;
+  const samples = [];
+
+  for (const { text, lineNo } of proseLines) {
+    const trimmed = text.trim();
+    if (!trimmed || isDivider(trimmed) || isStructural(trimmed)) continue;
+    if (NEGATION_SHORT_PATTERN.test(maskQuoted(trimmed))) {
+      hits += 1;
+      if (firstLine === null) firstLine = lineNo;
+      if (samples.length < 6 && !samples.includes(trimmed)) samples.push(trimmed);
+    }
+  }
+
+  if (hits < NEGATION_SHORT_MIN_HITS) return [];
+
+  return [{
+    line: firstLine,
+    column: 1,
+    type: 'negation-short-tic',
+    severity: 'advisory',
+    message: `「他没X」否定短句起手 ${hits} 处；段首连发「他没睡/他没回头」是省字过度压缩的电报体指纹，改写一半为正向动作（他在做什么，而非他没做什么），别把「没」当段落引擎。`,
+    excerpt: compact(samples.join(' ')),
+  }];
+}
+
+// 章内引号体系混用（M3 指纹）：英式引号对话与直角引号「」对话同章并存。
+function findQuoteMixTic(proseLines) {
+  let straight = 0;
+  let corner = 0;
+  let firstLine = null;
+  let straightSample = '';
+  let cornerSample = '';
+
+  for (const { text, lineNo } of proseLines) {
+    const trimmed = text.trim();
+    if (!trimmed || isDivider(trimmed) || isStructural(trimmed)) continue;
+    if (!/[\u4e00-\u9fff]/.test(text)) continue; // 纯英文行（代码/外语）不算对话体系
+    // 引号内容含中文才算中文对话（英文引号包英文单词是外语书写惯例）。
+    QUOTE_MIX_STRAIGHT_PATTERN.lastIndex = 0;
+    let m;
+    while ((m = QUOTE_MIX_STRAIGHT_PATTERN.exec(text)) !== null) {
+      if (/[\u4e00-\u9fff]/.test(m[1])) {
+        straight += 1;
+        if (!straightSample) { firstLine = lineNo; straightSample = m[0]; }
+      }
+    }
+    QUOTE_MIX_CORNER_PATTERN.lastIndex = 0;
+    while ((m = QUOTE_MIX_CORNER_PATTERN.exec(text)) !== null) {
+      if (/[\u4e00-\u9fff]/.test(m[1])) {
+        corner += 1;
+        if (!cornerSample) { if (firstLine === null) firstLine = lineNo; cornerSample = m[0]; }
+      }
+    }
+  }
+
+  if (straight < QUOTE_MIX_MIN_HITS || corner < QUOTE_MIX_MIN_HITS) return [];
+
+  return [{
+    line: firstLine,
+    column: 1,
+    type: 'quote-mix-tic',
+    severity: 'advisory',
+    message: `章内引号体系混用：英式引号对话 ${straight} 处与直角引号「」对话 ${corner} 处同章并存；全书统一一套（网文正文惯例直角「」），混用多是改稿残留，通查一遍统一。`,
+    excerpt: compact(`${straightSample} ${cornerSample}`),
   }];
 }
 

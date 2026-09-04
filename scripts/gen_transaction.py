@@ -337,7 +337,7 @@ def main() -> int:
         print("   ── 字段速查（schema 白名单，填错拒收）──")
         print("   snapshot 字段：identity / location / goal / state / alive(布尔) / abilities_resources / relationships / knowledge / open_threads")
         print("   timeline 字段：id(E001) / story_time / objective_fact(非 fact) / reader_knowledge / characters(数组) / reveal_status / reveal_chapter(部分揭示|已揭示必填)")
-        print("   foreshadow 字段：id(F001) / summary / planted_chapter / planned_resolution_chapter / status(已埋|已回收|已过期|放弃) / importance")
+        print("   foreshadow 字段：id(F001) / summary / planted_chapter / planned_resolution_chapter / status(已埋|推进|已回收|已过期|放弃) / importance；「推进」态建议填 progress_note（如「第3章主角已注意到戒指发烫，尚未知晓功能」，≤360 字节）")
         print("   items: name+holder+note ｜ secrets: name+known_by+revealed(布尔) ｜ pledges: name+due_chapter(数字)+status(未兑现|已兑现|已破誓)")
     here = Path(__file__).resolve().parent
     print(f"   提交：python3 {here / 'tracking_commit.py'} "

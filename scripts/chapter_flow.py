@@ -174,6 +174,44 @@ def _scores_from_review(root: Path, chapter: int) -> str | None:
     return ",".join(m[-1])  # 取最后一次（复评优先于初评）
 
 
+def _ai_flavor_over_threshold(root: Path, chapter: int) -> str | None:
+    """读取本章去 AI 味检测结果，AI 味 advisory 命中数超阈值时返回描述，未超/无法检测返回 None。
+
+    判据：微动作复读 ≥8 处 或 过度精炼短段占比 ≥45%（任一）。检测脚本 node 缺失、
+    超时或输出损坏时静默跳过——提醒是 advisory 的再提醒，不得阻塞收尾闭环。
+    """
+    import subprocess
+    draft = chapter_dir(root, chapter) / "draft.md"
+    if not draft.exists():
+        return None
+    node_script = (
+        Path(__file__).resolve().parent.parent
+        / "skills/branch/story-deslop/scripts/check-ai-patterns.js"
+    )
+    try:
+        result = subprocess.run(
+            ["node", str(node_script), "--check", "--fail-on=blocking", "--json", str(draft)],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    try:
+        findings = json.loads(result.stdout).get("findings", [])
+    except json.JSONDecodeError:
+        return None
+    for f in findings:
+        message = f.get("message", "")
+        if f.get("type") == "micro-action-tic":
+            m = re.search(r"(\d+) 处", message)
+            if m and int(m.group(1)) >= 8:
+                return f"微动作复读 {m.group(1)} 处（≥8）"
+        elif f.get("type") == "overcompressed-prose-tic":
+            m = re.search(r"（(\d+)%）", message)
+            if m and int(m.group(1)) >= 45:
+                return f"短段占比 {m.group(1)}%（≥45%）"
+    return None
+
+
 def finish(root: Path, chapter: int, coldread: str | None) -> int:
     """收尾批量执行：commit tx → 闸门 → 冷读材料；再跑趋势→归档→审稿→下一章。
 
@@ -260,6 +298,11 @@ def finish(root: Path, chapter: int, coldread: str | None) -> int:
         if rc != 0:
             return rc
     print(f"  ✅ 第 {chapter} 章闭环完成。下一章：chapter_flow.py prepare --project {root}")
+    # AI 味 advisory 超阈值提醒（M3 实测：微动作复读/短段偏密等 advisory 始终残留，
+    # 写作流程不会主动清）。超阈值 → 建议 story-polish 清理；只提醒不自动调用。
+    over = _ai_flavor_over_threshold(root, chapter)
+    if over:
+        print(f"  💡 本章 AI 味 advisory 超阈值（{over}）：建议运行 story-polish 清理")
     # 文风锚校准提醒（第 3 章后触发一次：量化基线应已可实测）
     anchor = root.parent / ".novel" / "style-anchor.md"
     if anchor.exists() and "___" in anchor.read_text(encoding="utf-8"):
