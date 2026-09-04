@@ -166,6 +166,27 @@ def cmd_wordcount(path: str, platform: str | None, type_: str) -> tuple[int, str
     return 0, "ok"
 
 
+def _style_anchor_allows_dash(root: Path) -> bool:
+    """style-anchor 已填写（非空模板）且未禁破折号/电报体 → True。
+
+    空模板（含 ___ 占位）一律不允许（无约束状态按最严口径）。"""
+    author = root
+    while author != author.parent and not (author / ".novel").is_dir():
+        author = author.parent
+    anchor = author / ".novel" / "style-anchor.md"
+    if not anchor.exists():
+        return False
+    try:
+        text = anchor.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if "___" in text:  # 空模板
+        return False
+    m = re.search(r"## 本书不用的腔调\n(.*?)(?=\n## |\Z)", text, flags=re.S)
+    banned = m.group(1) if m else ""
+    return not any(w in banned for w in ("破折号", "电报体", "——"))
+
+
 def cmd_deai(path: str) -> int:
     p = Path(path)
     if not p.exists():
@@ -192,6 +213,22 @@ def cmd_deai(path: str) -> int:
         if output:
             print(output)
         if result.returncode != 0:
+            # 文风锚联动：style-anchor 已填写且「本书不用的腔调」未禁破折号时，
+            # em-dash blocking 降为 advisory（猫腻腔等插入语风格天然多用破折号，
+            # 一刀切 blocking 会对这类文风全部误伤——M3 猫腻腔重写实验实证）
+            # 从 draft 路径冒泡定位项目根（独立子命令 deai 无 root 变量）
+            deai_root = p.parent
+            while deai_root != deai_root.parent and not (deai_root / ".story").is_dir():
+                deai_root = deai_root.parent
+            if _style_anchor_allows_dash(deai_root):
+                lines = output.splitlines()
+                dash_lines = [l for l in lines if "em-dash" in l and "blocking" in l]
+                other_blocking = [l for l in lines if "blocking" in l and "em-dash" not in l]
+                if dash_lines and not other_blocking:
+                    for l in dash_lines:
+                        print("⚠️  " + l.replace("[blocking]", "[advisory·文风豁免]"))
+                    print("✅ 去 AI 味通过（em-dash 已按文风锚降为 advisory，其余无 blocking）")
+                    return 0
             print("❌ 去 AI 味未通过（check-ai-patterns.js 检出 blocking 项）")
             return 1
         print("✅ 去 AI 味通过（无 blocking 项）")
