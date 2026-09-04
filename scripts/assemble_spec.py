@@ -311,6 +311,8 @@ def foreshadow_lines(root: Path, chapter: int, outline_plants: list[str]) -> lis
                 lines.append(f"- 回收 {row['id']}：{row['summary'][:40]}（计划回收 {row['planned']}）")
             elif chapter_in(row["planned"], chapter + 1) or chapter_in(row["planned"], chapter + 2):
                 lines.append(f"- 推进 {row['id']}：临近回收（{row['planned']}），本章为回收铺垫")
+        elif row["status"] == "推进":
+            lines.append(f"- 继续推进 {row['id']}：{row['summary'][:40]}（引信已落地，本章保持可见或再推进一步，计划回收 {row['planned']}）")
         elif row["status"] in ("已回收", "已过期", "放弃"):
             closed.append(f"{row['id']}（{row['summary'][:30]}）")
     lines.extend(outline_plants)

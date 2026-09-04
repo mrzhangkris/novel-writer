@@ -98,12 +98,14 @@ def main() -> int:
                 issues.append({"kind": "foreshadow-gap", "detail": f"伏笔编号缺口：{missing}"})
         # Claremont 系数（dreampowers 吸收）：已埋-已回收 >2 预警伏笔堆积
         buried = sum(1 for r in rows if r["status"] == "已埋")
+        advancing = sum(1 for r in rows if r["status"] == "推进")
         resolved = sum(1 for r in rows if r["status"] == "已回收")
         cc = buried - resolved
+        hint = f"（另有 {advancing} 条推进中）" if advancing else ""
         if cc > 2:
             issues.append({
                 "kind": "claremont-coefficient",
-                "detail": f"Claremont 系数 {cc}（已埋 {buried} - 已回收 {resolved}）> 2：伏笔堆积，读者记不住；后续章节优先安排回收",
+                "detail": f"Claremont 系数 {cc}（已埋 {buried} - 已回收 {resolved}）{hint} > 2：伏笔堆积，读者记不住；后续章节优先安排回收",
             })
 
     safe_section(issues, "foreshadow", _check_foreshadow)

@@ -268,14 +268,17 @@ def check_project(project: Path) -> dict[str, Any]:
         "character snapshot files differ from tracking state",
     )
 
+    # Claremont 系数：未推进的已埋伏笔 - 已回收。「推进」态已确认在收敛，不计入堆积
     active = sum(1 for f in state["foreshadow"].values() if f.get("status") == "已埋")
     resolved = sum(
         1 for f in state["foreshadow"].values() if f.get("status") == "已回收"
     )
+    advancing = sum(1 for f in state["foreshadow"].values() if f.get("status") == "推进")
     claremont = active - resolved
     if claremont > 2:
+        hint = f"（另有 {advancing} 条推进中）" if advancing else ""
         emit(
-            f"WARNING: Claremont 系数 = {claremont}（已埋 {active} - 已回收 {resolved}），伏笔债务过高，建议优先回收旧伏笔",
+            f"WARNING: Claremont 系数 = {claremont}（已埋 {active} - 已回收 {resolved}）{hint}，伏笔债务过高，建议优先回收旧伏笔",
             error=True,
         )
     elif active > 5 and resolved == 0:

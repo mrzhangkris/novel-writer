@@ -74,7 +74,7 @@
 |---|---|---|
 | 角色状态 | `character_changes[].change` + 快照 `location`/`alive` | 死者移动（死亡铁律：已死者 location 变化即拒收；置 `alive:false` 必须有明确死亡宣告） |
 | 情节/冲突 | `plot_points` | 冲突悬空不推进 |
-| 伏笔 | `foreshadow_changes`（状态机：已埋→已回收/已过期/放弃） | 埋而不收、收而不埋；已回收的悬念进 spec 反向提示「严禁重复写」 |
+| 伏笔 | `foreshadow_changes`（状态机：已埋→推进→已回收/已过期/放弃；「推进」=引信落地未全兑现，不计入 Claremont 堆积） | 埋而不收、收而不埋；已回收的悬念进 spec 反向提示「严禁重复写」 |
 | 时间线（双视图） | `timeline_events[].{objective_fact,reader_knowledge}` | 作者视角泄露（读者不该知道的提前知道） |
 | 道具 | `items[].{holder}` | 道具分身、凭空易手 |
 | 秘密 | `secrets[].{known_by,revealed}` | 秘密对不知情者泄露 |

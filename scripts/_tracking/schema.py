@@ -28,7 +28,7 @@ CONTEXT_HEADINGS = (
     "## 下一章承诺",
     "## 连贯性风险",
 )
-FORESHADOW_STATUSES = ("已埋", "已回收", "已过期", "放弃")
+FORESHADOW_STATUSES = ("已埋", "推进", "已回收", "已过期", "放弃")
 FORESHADOW_IMPORTANCE = ("高", "中", "低")
 REVEAL_STATUSES = ("未揭示", "部分揭示", "已揭示")
 HOSTILE_WORDS = (
