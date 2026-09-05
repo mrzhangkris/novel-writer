@@ -647,6 +647,58 @@ print("✓ 写手发明申报：tx → 账本 → context.md → 下章 spec 自
 PY
 rm -rf chapters/chapter-003 chapters/chapter-004 .story/tx-chapter-003.json
 
+# ---- story_query 冒烟（被引用最多的脚本，此前零测试）----
+SQ="$SKILL_DIR/scripts/story_query.py"
+python3 "$SQ" --context --project . | grep -q "当前位置" || fail "query --context"
+python3 "$SQ" --character 陆川 --project . | grep -q "静态人物卡" || fail "query --character 缺静态卡"
+python3 "$SQ" --foreshadow F001 --project . | grep -q "| F001" || fail "query --foreshadow 单条"
+python3 "$SQ" --timeline --project . >/dev/null || fail "query --timeline"
+python3 "$SQ" --chapter 1 --project . >/dev/null || fail "query --chapter"
+python3 "$SQ" --grep 周四海 --project . | grep -q "outline.md" || fail "query --grep"
+python3 "$SQ" --patterns --project . | grep -q "回归测试模式" || fail "query --patterns 缺已记录模式"
+python3 "$SQ" --status --project . >/dev/null || fail "query --status"
+pass "story_query 冒烟（8 子命令）"
+
+# ---- 多线叙事（threads）：双线停点渲染 + spec 停点注入 ----
+# rg1 此时 last_committed=3；拷归档 tx 构造 ch4 的 B线 append，验证切线记录与注入
+python3 - <<PY
+import json
+from pathlib import Path
+st = json.loads(Path("tracking/_tracking-state.json").read_text(encoding="utf-8"))
+base = json.loads(Path(".story/tx-archive/tx-chapter-003.json").read_text(encoding="utf-8"))
+base["chapter"] = 4
+base["expected_state_revision"] = st["state_revision"]
+base["context"]["thread"] = "B线"
+base["delta"]["result"] = "第4章：B线推进"
+base["delta"]["inventions"] = []
+base["delta"]["foreshadow_changes"] = []
+base["delta"]["timeline_events"] = []
+base["delta"]["plot_points"] = ["B线推进一步"]
+base["delta"]["next_chapter_commitments"] = []
+Path(".story/tx-chapter-004.json").write_text(json.dumps(base, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
+python3 "$SKILL_DIR/scripts/tracking_commit.py" validate --project . --input .story/tx-chapter-004.json >/dev/null || fail "threads validate"
+python3 "$SKILL_DIR/scripts/tracking_commit.py" commit --project . --input .story/tx-chapter-004.json >/dev/null || fail "threads commit"
+grep -q "B线" tracking/threads.md || fail "threads.md 缺 B线停点"
+grep -q "主线" tracking/threads.md || fail "threads.md 切线后丢主线"
+mkdir -p chapters/chapter-005
+printf '# 第 5 章写作蓝图\n## 大纲要点\n- [ ] 本章目标：\n## 前情衔接\n- \n' > chapters/chapter-005/spec.md
+python3 "$SKILL_DIR/scripts/assemble_spec.py" --chapter 5 --project . >/dev/null
+grep -q "本线停点" chapters/chapter-005/spec.md || fail "spec 未注入线停点"
+grep -q "B线" chapters/chapter-005/spec.md || fail "spec 停点不是最新 B线"
+rm -rf chapters/chapter-005 .story/tx-chapter-004.json
+pass "多线叙事：双线停点渲染 + spec 注入最新停点"
+
+# ---- polish_apply 链路：dry-run 唯一命中 + 精确替换落盘 ----
+mkdir -p chapters/chapter-009
+printf '林默把电动车停在巷口，抬头看了眼招牌。\n雨下起来了，他没带伞。\n' > chapters/chapter-009/draft.md
+printf '# 第 9 章 polish 清单（测试）\n原文「雨下起来了，他没带伞。」→ 改写「雨点砸下来，他这才想起伞落在店里。」\n' > .story/polish-test.md
+python3 "$SKILL_DIR/scripts/polish_apply.py" --project . --input .story/polish-test.md --dry-run | grep -q "替换 1/1" || fail "polish dry-run 未唯一命中"
+python3 "$SKILL_DIR/scripts/polish_apply.py" --project . --input .story/polish-test.md >/dev/null || fail "polish apply 失败"
+grep -q "雨点砸下来" chapters/chapter-009/draft.md || fail "polish 替换未落盘"
+rm -rf chapters/chapter-009 .story/polish-test.md
+pass "polish_apply：dry-run 唯一命中 + 精确替换落盘"
+
 # ---- 终检 ----
 # 旧项目缺 ledger.md（v5 之前的老账本）：首次 check 应自动补写、不报错
 rm -f tracking/ledger.md
