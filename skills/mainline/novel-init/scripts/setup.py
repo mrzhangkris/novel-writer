@@ -47,6 +47,8 @@ TEMPLATE_FILES = [
     "character-card-simple.md",
     # 书级追踪（开新书时拷到书目录 tracking/；其余走 tracking_commit）
     "pacing.md",
+    # 写手档案（写手 yeyue/Minimax M3 的文风基线与AI味阈值，calibrate 实例化到 .novel/writer.md）
+    "writer-profile.md",
 ]
 
 PLAYBOOK_TEMPLATE = """# 写作技法库（作者级，跨书复用）
@@ -93,7 +95,7 @@ PREFERENCES_TEMPLATE = """# 作者偏好与能力索引
 - 调研：story-long-scan（扫榜）+ search 技能（多引擎搜索榜单/考据）
 - 文风：style-anchor.md（本目录）+ genre-prose-cards/（32 题材）+ story-long-analyze（拆书蒸馏）
 - 去AI味：banned-words.txt（本目录，用户自定义词表扩展位——当前去AI味闸门以 check-ai-patterns.js 内置词表为准，此文件尚未接入引擎）+ skills/branch/story-deslop/references/banned-words.md + check-ai-patterns.js
-- 方法论：references/writing-methods/（34 份）+ references/editor-checklist.md（编辑自检六条）
+- 方法论：references/writing-methods/（方法论库，先查 INDEX.md）+ references/craft-canon.md（唯一人工清单权威：特质/红线/编辑清单/质量自查）
 - 字数：references/word-count.json（平台）+ concept.md 目标篇幅（通用）
 """
 

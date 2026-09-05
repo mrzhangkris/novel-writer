@@ -155,6 +155,13 @@ def render_context(state: dict[str, Any]) -> str:
         ("## 核心角色状态", character_lines),
         ("## 活跃伏笔", active_foreshadow_lines(state["foreshadow"])),
         (
+            "## 写手发明",
+            [
+                f"（第{item['chapter']}章）{item['text']}"
+                for item in state.get("inventions", [])
+            ],
+        ),
+        (
             "## 近三章速记",
             [
                 f"第{item['chapter']}章｜{item['summary']}"
@@ -178,7 +185,7 @@ def render_context(state: dict[str, Any]) -> str:
     headings = tuple(line for line in payload.splitlines() if line.startswith("## "))
     require(
         headings == CONTEXT_HEADINGS,
-        "generated context headings do not match the seven-section schema",
+        "generated context headings do not match the eight-section schema",
     )
     require(
         byte_size(payload) <= CONTEXT_MAX_BYTES,

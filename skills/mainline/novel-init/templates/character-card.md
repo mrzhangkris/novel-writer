@@ -1,7 +1,7 @@
 # 人物卡：{角色名}
 
 > 静态档案，记「不变量」——无论剧情怎么走都不该变的东西。
-> 动态信息（当前处境、能力变化）记在 tracking/character-states.md，不要写在这里。
+> 动态信息（当前处境、能力变化）记在 tracking/characters/ 快照，不要写在这里。
 >
 > 本卡是**详卡**（与主角/详卡角色有直接关系网）。若该角色属"边缘出场、功能单一"，用 `character-card-simple.md`（简卡）而非本卡。
 > 详/简判定标准见 `references/writing-methods/character-design-methods.md`「双层卡设计」一节。

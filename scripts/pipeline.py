@@ -313,6 +313,76 @@ def cmd_gate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _project_pacing(root: Path) -> None:
+    """outline 完成时把大纲「情绪曲线」投影成 tracking/pacing.md 初稿（幂等 upsert）。
+
+    pacing.md 是唯一手写例外——本函数只生成初稿降低「忘了填、冲突检测全程空转」的概率，
+    强度判定是关键词启发（爽/爆/对峙→高，缓/日常/收束→低，其余→中），以人工核订为准。
+    大纲无情绪曲线或 pacing.md 缺失时静默跳过；已有人工行（章号不在曲线内）原样保留。"""
+    pacing_path = root / "tracking" / "pacing.md"
+    outline_path = root / "outline.md"
+    if not pacing_path.exists() or not outline_path.exists():
+        return
+    text = outline_path.read_text(encoding="utf-8")
+    section = re.search(r"## 情绪曲线[^\n]*\n(.*?)(?=\n## |\Z)", text, flags=re.S)
+    if not section:
+        return
+    entries: dict[int, str] = {}
+    for raw in section.group(1).splitlines():
+        line = raw.strip().lstrip("-").strip()
+        if not line:
+            continue
+        for part in re.split(r"[、；;，,]", line):
+            m = re.match(r"第\s*(\d+)\s*章\s*[：:]?\s*(\S.*)", part.strip())
+            if m:
+                entries[int(m.group(1))] = m.group(2).strip()
+    if not entries:
+        return
+
+    def intensity(note: str) -> str:
+        if any(w in note for w in ("爽", "爆", "高潮", "炸", "对峙", "摊牌", "决裂", "爆发", "反转")):
+            return "高"
+        if any(w in note for w in ("缓", "日常", "温馨", "暖", "铺垫", "过渡", "余味", "收束", "番外", "留白")):
+            return "低"
+        return "中"
+
+    new_rows = {
+        ch: f"| 第{ch}章 | {intensity(note)} | {note}（自动投影，人工核订） |"
+        for ch, note in sorted(entries.items())
+    }
+    # 合并：曲线内的章号以投影为准刷新；曲线外的人工行原样保留
+    merged: dict[int, str] = {}
+    for line in pacing_path.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"\|\s*第\s*(\d+)\s*章\s*\|", line)
+        if m:
+            ch = int(m.group(1))
+            merged[ch] = new_rows.get(ch, line.strip())
+    for ch, row in new_rows.items():
+        merged.setdefault(ch, row)
+    block = [
+        "## 情绪强度记录",
+        "| 章节 | 强度（低/中/高） | 触发内容 |",
+        "|---|---|---|",
+        *[merged[c] for c in sorted(merged)],
+        "",
+    ]
+    out: list[str] = []
+    skipping = False
+    for line in pacing_path.read_text(encoding="utf-8").splitlines() + [""]:
+        if line.startswith("## 情绪强度记录"):
+            skipping = True
+            out.extend(block)
+            continue
+        if skipping:
+            if line.startswith("## "):
+                skipping = False
+                out.append(line)
+            continue
+        out.append(line)
+    pacing_path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+    print(f"   📊 pacing.md 已从大纲情绪曲线投影初稿（{len(merged)} 章，强度为启发判定，人工核订）")
+
+
 def cmd_advance(args: argparse.Namespace) -> int:
     step = args.step
     if step not in STEPS:
@@ -361,6 +431,8 @@ def cmd_advance(args: argparse.Namespace) -> int:
 
     state["steps"][step] = "done"
     print(f"✅ 完成步骤：{step}")
+    if step == "outline":
+        _project_pacing(root)
 
     # ── 正文指纹防线：防「draft 过门后偷换正文绕过质量门」──
     # draft 通过时固化指纹；revise/archive 时核对，改过稿就必须重新过 checks.py draft 全套。

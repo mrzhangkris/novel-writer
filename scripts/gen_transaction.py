@@ -268,6 +268,9 @@ def gen_commit(root: Path, pipe: dict, revision: bool, chapter_override: int | N
             "retired_characters": [],
             "new_abilities": new_abilities,
             "rule_overrides": [],
+            # 写手发明申报：正文确立的计划外设定/人物/事实，一句一条（≤6 条 × 360B）。
+            # 不申报 = 下一章章纲/账本不知道，冲突后爆；申报后进 context.md 供下章 spec 组装。
+            "inventions": [],
         },
         "context": {
             "position": {

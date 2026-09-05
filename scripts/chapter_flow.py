@@ -17,6 +17,8 @@ import sys
 from pathlib import Path
 
 from _common import find_project_root
+from _textstat import BASELINE_SENT_RE, baseline_range, cjk_len, split_sentences
+from writer_profile import WRITER_NAME, author_root, load_profile, verdict_threshold
 
 STEPS = ["setup", "outline", "draft", "revise", "archive"]
 STEP_LABEL = {
@@ -177,8 +179,9 @@ def _scores_from_review(root: Path, chapter: int) -> str | None:
 def _ai_flavor_over_threshold(root: Path, chapter: int) -> str | None:
     """读取本章去 AI 味检测结果，AI 味 advisory 命中数超阈值时返回描述，未超/无法检测返回 None。
 
-    判据：微动作复读 ≥8 处 或 过度精炼短段占比 ≥45%（任一）。检测脚本 node 缺失、
-    超时或输出损坏时静默跳过——提醒是 advisory 的再提醒，不得阻塞收尾闭环。
+    判据：微动作复读 ≥8 处 或 过度精炼短段占比 ≥45%（任一；写手档案可豁免
+    单项或以「阈值=N」覆盖默认）。检测脚本 node 缺失、超时或输出损坏时静默
+    跳过——提醒是 advisory 的再提醒，不得阻塞收尾闭环。
     """
     import subprocess
     draft = chapter_dir(root, chapter) / "draft.md"
@@ -199,20 +202,119 @@ def _ai_flavor_over_threshold(root: Path, chapter: int) -> str | None:
         findings = json.loads(result.stdout).get("findings", [])
     except json.JSONDecodeError:
         return None
+    # 阈值按写手档案校准：AI 味与文风纠缠，判据按写手实测（M3 实证）
+    author = author_root(root)
+    prof = load_profile(author)
+    verdicts = prof["verdicts"] if prof else {}
+    micro_thr = verdict_threshold(verdicts.get("micro-action-tic"), 8)
+    over_thr = verdict_threshold(verdicts.get("overcompressed-prose-tic"), 45)
     for f in findings:
         message = f.get("message", "")
-        if f.get("type") == "micro-action-tic":
+        if f.get("type") == "micro-action-tic" and micro_thr is not None:
             m = re.search(r"(\d+) 处", message)
-            if m and int(m.group(1)) >= 8:
-                return f"微动作复读 {m.group(1)} 处（≥8）"
-        elif f.get("type") == "overcompressed-prose-tic":
+            if m and int(m.group(1)) >= micro_thr:
+                return f"微动作复读 {m.group(1)} 处（≥{micro_thr:g}）"
+        elif f.get("type") == "overcompressed-prose-tic" and over_thr is not None:
             m = re.search(r"（(\d+)%）", message)
-            if m and int(m.group(1)) >= 45:
-                return f"短段占比 {m.group(1)}%（≥45%）"
+            if m and int(m.group(1)) >= over_thr:
+                return f"短段占比 {m.group(1)}%（≥{over_thr:g}）"
     return None
 
 
-def finish(root: Path, chapter: int, coldread: str | None) -> int:
+def _sentence_len_alert(root: Path, chapter: int) -> str | None:
+    """句均长 vs 基线下限（电报体检测）。
+
+    checks.py 风格基线校验的孪生判据：那边只出 ⚠️ 行，容易淹没在闸门输出里，
+    这里归档提醒再提一次。句均长 < 基线下限 × 0.7 时触发（如基线 18-25、
+    实测 11.9——M3 第 9 章实证，微动作/短段判据都测不到这种电报体）。
+    基线来源分层：写手档案 .novel/writer.md 的量化基线优先，回退作者级
+    style-anchor。句切分与 CJK 计数对齐 checks.py cmd_style_baseline（同走
+    _textstat）；基线缺失/无 draft 时静默跳过——提醒是 advisory，不得阻塞收尾闭环。
+    """
+    draft = chapter_dir(root, chapter) / "draft.md"
+    if not draft.exists():
+        return None
+    lo = None
+    src = None
+    author = author_root(root)
+    prof = load_profile(author)
+    if prof and prof["sent"]:
+        lo = prof["sent"][0]
+        src = f"写手 {WRITER_NAME} 档案"
+    elif author:
+        try:
+            anchor_text = (author / ".novel" / "style-anchor.md").read_text(encoding="utf-8")
+        except OSError:
+            return None
+        m = baseline_range(anchor_text, BASELINE_SENT_RE)
+        if m:
+            lo = m[0]
+            src = "style-anchor"
+    if lo is None:
+        return None
+    text = draft.read_text(encoding="utf-8")
+    lens = [cjk_len(s) for s in split_sentences(text)]
+    if not lens:
+        return None
+    avg = sum(lens) / len(lens)
+    if avg < lo * 0.7:
+        return f"句均长 {avg:.1f} 字（{src}基线下限 {lo}，<{lo * 0.7:.1f}，电报体）"
+    return None
+
+
+def _write_polish_list(root: Path, chapter: int) -> Path | None:
+    """--polish：跑去 AI 味检测器，把命中按「原文「…」→ 改写「…」」清单骨架落盘。
+
+    清单供 AI 逐条补改写后交给 polish_apply.py 批量替换——把「超阈值→提醒→人工另起
+    polish 支线」压缩成 finish 一个 flag。node 缺失/超时返回 None（advisory 不阻塞）。"""
+    import subprocess
+    draft = chapter_dir(root, chapter) / "draft.md"
+    if not draft.exists():
+        return None
+    node_script = (
+        Path(__file__).resolve().parent.parent
+        / "skills/branch/story-deslop/scripts/check-ai-patterns.js"
+    )
+    try:
+        result = subprocess.run(
+            ["node", str(node_script), "--check", "--json", str(draft)],
+            capture_output=True, text=True, timeout=60,
+        )
+        findings = json.loads(result.stdout or "{}").get("findings", [])
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        return None
+    out = root / ".story" / f"polish-list-chapter-{chapter:03d}.md"
+    lines = [
+        f"# 第 {chapter} 章 polish 清单（--polish 自动生成，AI 逐条审定改写）",
+        "",
+        "格式：每条一行 `原文「…」→ 改写「…」`（原文逐字摘自 draft.md，改写不动剧情）；",
+        "一条命中含多句时拆成多行，逐句给改写；",
+        "审定完跑：polish_apply.py --project 本书目录 --input 本清单",
+        "",
+    ]
+    filled = 0
+    for f in findings:
+        ftype = f.get("type", "?")
+        message = f.get("message", "")
+        excerpt = (f.get("excerpt", "") or "").strip()
+        lines.append(f"## {ftype}（{message[:80]}）")
+        if excerpt:
+            lines.append(f"- 检出原句：{excerpt}")
+            lines.append(f"- 原文「{excerpt}」→ 改写「」")
+            filled += 1
+        else:
+            lines.append("- 原文「」→ 改写「」")
+        lines.append("")
+    if not findings:
+        lines.append("- （检测器零命中；写手档案盯防项若仍超阈值，按 spec 风格指令人工挑）")
+        lines.append("")
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print(f"  🧹 polish 清单已生成：{out}（{filled} 条待改写）")
+    print("     下一步：AI 逐条补全改写（原文逐字、不动剧情）→ polish_apply.py --project 本书目录 --input 该清单")
+    return out
+
+
+def finish(root: Path, chapter: int, coldread: str | None, polish: bool = False) -> int:
     """收尾批量执行：commit tx → 闸门 → 冷读材料；再跑趋势→归档→审稿→下一章。
 
     冷读分数来源：--coldread 参数 > review.md 里子代理已落盘的独立评分
@@ -245,6 +347,8 @@ def finish(root: Path, chapter: int, coldread: str | None) -> int:
         print("  🧊 冷读：spawn 子代理读 draft.md + review.md 评分。")
         print("  子代理把四维分数落进 review.md 后，直接重跑 finish（自动解析分数），")
         print(f"  或显式传分：chapter_flow.py finish --project {root} --coldread 翻页分,认知分,共情分,节奏分")
+        if polish:
+            _write_polish_list(root, chapter)
         return 0
     # 冷读段：先校验分数 → 打回判定 → 落 review.md → 趋势 → 审稿 → revise/archive → 下一章
     # 顺序纪律：非法分数绝不落盘（防坏分污染 review.md 后 _verify_review_integrity 恒拒）；
@@ -301,12 +405,20 @@ def finish(root: Path, chapter: int, coldread: str | None) -> int:
     # AI 味 advisory 超阈值提醒（M3 实测：微动作复读/短段偏密等 advisory 始终残留，
     # 写作流程不会主动清）。超阈值 → 建议 story-polish 清理；只提醒不自动调用。
     over = _ai_flavor_over_threshold(root, chapter)
-    if over:
-        print(f"  💡 本章 AI 味 advisory 超阈值（{over}）：建议运行 story-polish 清理")
-    # 文风锚校准提醒（第 3 章后触发一次：量化基线应已可实测）
+    sent = _sentence_len_alert(root, chapter)
+    alerts = "；".join(a for a in (over, sent) if a)
+    if alerts:
+        print(f"  💡 本章 AI 味 advisory 超阈值（{alerts}）：写前避开项是软约束，压不住属正常——"
+              f"spawn story-polish 子代理按写手档案盯防项挑病句清单（{WRITER_NAME} 档案见 .novel/writer.md），"
+              "采纳项用 polish_apply.py 批量替换")
+    if polish:
+        _write_polish_list(root, chapter)
+    # 文风锚校准提醒（写手档案没接住基线时的兜底提醒；chapters 目录数为实际已写章数）
     anchor = root.parent / ".novel" / "style-anchor.md"
-    if anchor.exists() and "___" in anchor.read_text(encoding="utf-8"):
-        print("  💡 文风锚量化基线仍是空模板：已写 3 章，建议实测句长/对话占比回填 style-anchor.md（防后续文风漂移无约束）")
+    chapters_dir = root / "chapters"
+    written = len(list(chapters_dir.glob("chapter-*/draft.md"))) if chapters_dir.exists() else 0
+    if anchor.exists() and written >= 2 and "___" in anchor.read_text(encoding="utf-8"):
+        print(f"  💡 文风锚量化基线仍是空模板（已写 {written} 章）：建议把写手档案基线回填 style-anchor.md（防后续文风漂移无约束）")
     print("  💡 本章有妙处/坑？learn.py add --scope project/author 沉淀一条；全书完跑 book_finish.py --project 收尾")
     return 0
 
@@ -316,6 +428,7 @@ def main() -> int:
     parser.add_argument("command", choices=["status", "prepare", "finish"])
     parser.add_argument("--project", type=Path, default=None)
     parser.add_argument("--coldread", type=str, default=None, help="finish 用：四维分数，逗号分隔")
+    parser.add_argument("--polish", action="store_true", help="finish 用：生成 polish 清单（检测命中→polish_apply 批量替换）")
     args = parser.parse_args()
     start = args.project if args.project else Path.cwd()
     root = find_project_root(start, child=".story")
@@ -331,7 +444,7 @@ def main() -> int:
         return prepare(root, chapter)
     if args.command == "finish":
         print(f"📖 《{pipe.get('project', root.name)}》 收尾批量执行：第 {chapter} 章")
-        return finish(root, chapter, args.coldread)
+        return finish(root, chapter, args.coldread, polish=args.polish)
     print(f"📖 《{pipe.get('project', root.name)}》 进度：第 {chapter} 章")
     print("   步骤：" + " → ".join(
         f"{STEP_LABEL.get(k, k)}{'✅' if v == 'done' else '…'}" for k, v in steps.items() if k in STEP_LABEL

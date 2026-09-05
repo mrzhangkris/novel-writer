@@ -34,7 +34,17 @@ import sys
 from pathlib import Path
 
 from _common import EXEMPTIONS_FILE, STORY_DIR, find_project_root
+from _textstat import (
+    BASELINE_DIALOG_RE,
+    BASELINE_PARA_RE,
+    BASELINE_SENT_RE,
+    baseline_range,
+    cjk_len,
+    measure_baseline,
+    split_sentences,
+)
 from check_engine import load_rules, run_count_rule, run_rules
+from writer_profile import WRITER_NAME, author_root, load_profile
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCES_DIR = SCRIPT_DIR.parent / "references"
@@ -42,7 +52,6 @@ WORD_COUNT_FILE = REFERENCES_DIR / "word-count.json"
 TRACKING_SCRIPT = SCRIPT_DIR / "tracking_commit.py"
 PIPELINE_FILE = ".story/pipeline.json"
 
-CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 CROSS_CHAPTER_WINDOW = 300
 CROSS_CHAPTER_MIN_MATCH = 20
 META_MARKDOWN_RE = re.compile(
@@ -78,10 +87,6 @@ def load_json(path: Path) -> dict:
     except (json.JSONDecodeError, OSError):
         print(f"⚠️  配置文件损坏：{path}")
         return {}
-
-
-def count_cjk(text: str) -> int:
-    return len(CJK_RE.findall(text))
 
 
 def load_pipeline(root: Path) -> dict:
@@ -121,7 +126,7 @@ def cmd_wordcount(path: str, platform: str | None, type_: str) -> tuple[int, str
         return 1, "none"
     # 剥离 HTML 注释后再计数：<!-- --> 是给 AI 的标注不是读者内容，不剥离则可被用来凑字数
     text = re.sub(r"<!--.*?-->", "", p.read_text(encoding="utf-8"), flags=re.DOTALL)
-    n = count_cjk(text)
+    n = cjk_len(text)
 
     root = find_project_root(Path.cwd())
     platform = resolve_platform(root, platform)
@@ -170,12 +175,19 @@ def cmd_wordcount(path: str, platform: str | None, type_: str) -> tuple[int, str
 
 
 def _style_anchor_allows_dash(root: Path) -> bool:
-    """style-anchor 已填写（非空模板）且未禁破折号/电报体 → True。
+    """em-dash blocking 是否按文风豁免。
 
+    写手档案优先：.novel/writer.md 的 AI 味倾向表显式登记了 em-dash
+    （豁免→允许；盯防→按最严口径拦）时按档案裁定——AI 味与文风纠缠，
+    豁免是文风决策。档案未登记/无档案 → 回退 style-anchor：
+    已填写（非空模板）且「本书不用的腔调」未禁破折号/电报体 → True。
     空模板（含 ___ 占位）一律不允许（无约束状态按最严口径）。"""
-    author = root
-    while author != author.parent and not (author / ".novel").is_dir():
-        author = author.parent
+    author = author_root(root)
+    prof = load_profile(author)
+    if prof and "em-dash" in prof["verdicts"]:
+        return prof["verdicts"]["em-dash"]["verdict"] == "豁免"
+    if author is None:
+        return False
     anchor = author / ".novel" / "style-anchor.md"
     if not anchor.exists():
         return False
@@ -495,18 +507,23 @@ def cmd_style_baseline(draft_path: Path) -> int:
     root = find_project_root(Path.cwd())
     if root is None:
         return 0
-    author = root
-    while author != author.parent and not (author / ".novel").is_dir():
-        author = author.parent
-    anchor_path = author / ".novel" / "style-anchor.md"
-    if not anchor_path.exists():
+    author = author_root(root)
+    anchor_path = author / ".novel" / "style-anchor.md" if author else None
+    anchor_text = ""
+    if anchor_path and anchor_path.exists():
+        anchor_text = anchor_path.read_text(encoding="utf-8")
+    else:
         print("⚠️  文风锚缺失：.novel/style-anchor.md 不存在，写作无风格依据（建议 novel-init 补建）")
-        return 0
-    anchor_text = anchor_path.read_text(encoding="utf-8")
-    if "____" in anchor_text and "平均句长：约 ___ 字" in anchor_text:
-        return 0  # 基线未填，跳过
 
-    # ── 文风锚完整性硬校验 ──
+    # 量化基线来源分层：写手档案优先，作者锚回退——AI 味与文风纠缠，基线按写手实测
+    prof = load_profile(author)
+    prof_has_range = bool(prof and (prof["sent"] or prof["dialog"] or prof["para"]))
+    anchor_unfilled = "____" in anchor_text and "平均句长：约 ___ 字" in anchor_text
+    if not prof_has_range and (not anchor_text or anchor_unfilled):
+        return 0  # 作者锚与写手档案都没有可用基线，跳过
+
+    # ── 文风锚完整性硬校验（仅作者锚已填写时；纯写手档案路径不适用本闸）──
+    anchor_filled = bool(anchor_text) and not anchor_unfilled
     integrity_fail = 0
     sample_m = re.search(r"## 样板段落(.*?)(?=\n## |\Z)", anchor_text, re.S)
     sample = sample_m.group(1) if sample_m else ""
@@ -515,51 +532,45 @@ def cmd_style_baseline(draft_path: Path) -> int:
     positive_m = re.search(r"## 句式示范(.*?)(?=\n## |\Z)", anchor_text, re.S)
     positive = positive_m.group(1) if positive_m else ""
     has_positive = len(re.findall(r"[\u4e00-\u9fff]", positive)) >= 30
-    if has_placeholder:
+    if anchor_filled and has_placeholder:
         print("❌ 文风锚样板段落未填（仍是「第 N 章写完后续写」占位）：先回填一段最能代表文风的真实原文，再写正文")
         integrity_fail = 1
-    if not has_real_sample and not has_positive:
+    if anchor_filled and not has_real_sample and not has_positive:
         print("❌ 文风锚没有正向示范（样板段落空 + 无句式示范）：纯负向清单写不出有味道的正文，先补正向样例")
         integrity_fail = 1
-    # 主角名绑定检查：作者级锚不应绑定单书主角（「贴陈默」类历史 bug 的复发检测）
-    protag = re.search(r"贴([\u4e00-\u9fff]{1,4})", anchor_text)
-    if protag:
-        name = protag.group(1)
-        chars_dir = root / "tracking" / "characters"
-        char_files = list(chars_dir.glob("*.md")) if chars_dir.is_dir() else []
-        if char_files and name not in {f.stem for f in char_files}:
-            print(f"⚠️  文风锚绑定主角「{name}」与本书角色不符：作者级锚建议写「贴主角」而非具体人名")
+    # 主角名绑定检查：作者级锚不应绑定单书主角（「贴陈默」类历史 bug 的复发检测）。
+    # 仅在锚已填写时启用——空模板的说明文字（如「紧贴原文段落」）必然误报。
+    if anchor_filled:
+        protag = re.search(
+            r"贴(?!脸|合|身|近|着|板|膜|纸|条|签|图|金|息|吧|了|上|去|出|进|回|到|好|牢|紧|心|补|换|加)([\u4e00-\u9fff]{1,4})",
+            anchor_text,
+        )
+        if protag:
+            name = protag.group(1)
+            chars_dir = root / "tracking" / "characters"
+            char_files = list(chars_dir.glob("*.md")) if chars_dir.is_dir() else []
+            if char_files and name not in {f.stem for f in char_files}:
+                print(f"⚠️  文风锚绑定主角「{name}」与本书角色不符：作者级锚建议写「贴主角」而非具体人名")
     if integrity_fail:
         return 1
 
-    def rng(pattern):
-        m = re.search(pattern, anchor_text)
-        if not m:
-            return None
-        lo = int(m.group(1)); hi = int(m.group(2))
-        return (min(lo, hi), max(lo, hi))
-
-    sent = rng(r"平均句长：约\s*(\d+)\s*[-~到至]\s*(\d+)\s*字")
-    dialog = rng(r"对话占比：约\s*(\d+)\s*[-~到至]\s*(\d+)\s*%")
-    para = rng(r"段落中位长度：约\s*(\d+)\s*[-~到至]\s*(\d+)\s*行")
+    if prof_has_range:
+        sent, dialog, para = prof["sent"], prof["dialog"], prof["para"]
+    else:
+        sent = baseline_range(anchor_text, BASELINE_SENT_RE)
+        dialog = baseline_range(anchor_text, BASELINE_DIALOG_RE)
+        para = baseline_range(anchor_text, BASELINE_PARA_RE)
     if not (sent or dialog or para):
         return 0
 
     text = draft_path.read_text(encoding="utf-8")
-    cjk = count_cjk(text)
-    # 句长：按句末标点切分
-    sents = [s for s in re.split(r"[。！？；\n]", text) if s.strip()]
-    sents_cjk = [count_cjk(s) for s in sents]
-    avg_sent = round(sum(sents_cjk) / len(sents_cjk), 1) if sents_cjk else 0
-    # 对话占比：引号内 CJK / 总 CJK
-    quoted = sum(count_cjk(m) for m in re.findall(r"「[^」]*」", text))
-    dialog_ratio = round(quoted / cjk * 100, 1) if cjk else 0
-    # 段落中位长度（行）
-    paras = [par.count("\n") + 1 for par in re.split(r"\n\s*\n", text) if par.strip()]
-    paras.sort()
-    med_para = paras[len(paras) // 2] if paras else 0
+    cjk = cjk_len(text)
+    base = measure_baseline(text)
+    avg_sent = round(base["avg_sent"], 1)
+    dialog_ratio = round(base["dialog_pct"], 1)
+    med_para = base["med_para"]
 
-    print("🎨 风格基线校验（对照 style-anchor 量化基线）：")
+    print(f"🎨 风格基线校验（对照{'写手 ' + WRITER_NAME + ' 档案' if prof_has_range else 'style-anchor'}量化基线）：")
     if sent and avg_sent:
         lo, hi = int(sent[0] * 0.8), int(sent[1] * 1.3)
         flag = "✅" if lo <= avg_sent <= hi else "⚠️"
@@ -594,19 +605,35 @@ def cmd_unknown_speakers(draft_path: Path) -> int:
             return True
         return False
 
+    # 回放声豁免线索：说话人紧邻这些词时是录音/设备里的声音，不是在场说话人
+    PLAYBACK_CUES = ("录音", "喇叭", "音箱", "广播", "磁带", "播放", "听筒", "电话", "视频", "耳机", "收音机")
+    speakers = set()
+
+    def _known_adverb(name: str) -> bool:
+        if name in ADVERBS or name[-1] in "先又也都才便就忙急再":
+            return True
+        if name[0] in "他她它" and (name[1:] in ADVERBS or not name[1:]):
+            return True
+        return False
+
+    def _playback(pos: int) -> bool:
+        window = text[max(0, pos - 12):pos]
+        return any(cue in window for cue in PLAYBACK_CUES)
+
     for m in re.finditer(r"」([\u4e00-\u9fff]{2,3}?)[说问道喊应叫笑骂]", text):
         name = m.group(1)
-        if not _known_adverb(name):
+        if not _known_adverb(name) and not _playback(m.start()):
             speakers.add(name)
     # 前置式：「马六说道」「马六问」——原实现只认后置式，前置式全部漏检
     for m in re.finditer(r"([\u4e00-\u9fff]{2,3}?)(?:说道|问道|喊道|应道|答道|喝道|骂道|笑道|叫道|低声道|沉声道|开口道)", text):
         name = m.group(1)
-        if not _known_adverb(name):
+        if not _known_adverb(name) and not _playback(m.start()):
             speakers.add(name)
     if not speakers:
         return 0
-    # 已知名单：tracking 角色 + 大纲 + 通用人称
-    known = {"他", "她", "他们", "她们", "众人", "大家", "两人", "男人", "女人", "老头", "司机"}
+    # 已知名单：tracking 角色 + 大纲 + 通用人称/称谓（「老人」类泛称不是需要建卡的实体）
+    known = {"他", "她", "他们", "她们", "众人", "大家", "两人", "男人", "女人", "老头", "司机",
+             "老人", "老太太", "老婆子", "老头子", "孩子", "小孩", "姑娘", "小子", "中年人", "声音"}
     state_file = root / "tracking" / "_tracking-state.json"
     state = load_json(state_file)
     if isinstance(state, dict):

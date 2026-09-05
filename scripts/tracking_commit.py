@@ -241,19 +241,20 @@ def check_project(project: Path) -> dict[str, Any]:
         )
 
     expected_views = render_views(state)
-    # 旧协议迁移：老状态文件没有 overrides 键（v4 之前），首次 check 时补写空账本视图。
-    raw_state = read_json(state_path(project))
-    if isinstance(raw_state, dict) and "overrides" not in raw_state:
-        write_if_changed(tracking / "overrides.md", expected_views["overrides.md"])
-    # v5 迁移：ledger.md（道具/秘密/誓约台账视图）是新增派生视图，首次 check 补写，不报缺失。
-    if not (tracking / "ledger.md").exists():
-        write_if_changed(tracking / "ledger.md", expected_views["ledger.md"])
+    # 派生视图缺失 = 旧协议迁移或渲染层升级，直接按账本重建（state 是唯一权威，视图可再生）；
+    # 存在但内容不符 = 篡改/手改，拒绝（防手改派生视图被当成事实源）。
     for relative, expected in expected_views.items():
         path = tracking / relative
-        require(path.exists(), f"derived view is missing: {relative}")
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(expected, encoding="utf-8")
+            print(f"  ✓ 派生视图缺失，已按账本重建：{relative}", file=sys.stderr)
+    for relative, expected in expected_views.items():
+        path = tracking / relative
         require(
             path.read_text(encoding="utf-8") == expected,
-            f"derived view differs from _tracking-state.json: {relative}",
+            f"derived view differs from _tracking-state.json: {relative}"
+            "（视图是账本的派生物，禁止手改；若因渲染层升级失配，删除该视图后重跑 check 重建）",
         )
     expected_character_files = {
         Path(relative).name
@@ -347,6 +348,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="book project root containing tracking/",
     )
+    validate_parser = subparsers.add_parser(
+        "validate", help="事务预校验（G1 协议全字段校验：白名单/类型/字节上限/stale；不落账不合并）"
+    )
+    validate_parser.add_argument(
+        "--project", type=Path, required=True, help="book project root containing tracking/"
+    )
+    validate_parser.add_argument(
+        "--input", type=Path, required=True, help="UTF-8 JSON 事务文件"
+    )
     rename_parser = subparsers.add_parser(
         "rename", help="改书名（账本 book_title 字段的合法修改入口，避免手改账本）"
     )
@@ -361,6 +371,11 @@ def main() -> int:
     try:
         if args.command == "init":
             result = initialize(args.project, read_json(args.input))
+        elif args.command == "validate":
+            state = load_state(args.project)
+            normalize_transaction(state, read_json(args.input))
+            print("✅ 事务协议校验通过（G1 全字段；未落账）")
+            return 0
         elif args.command == "commit":
             result = apply_transaction(args.project, read_json(args.input))
             _archive_tx_after_commit(args.project, args.input)

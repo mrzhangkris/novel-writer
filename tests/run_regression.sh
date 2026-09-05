@@ -179,6 +179,8 @@ cat > characters-pool.md <<'EOF'
 EOF
 python3 "$SKILL_DIR/scripts/pipeline.py" advance outline >/dev/null || fail "advance outline"
 pass "outline 推进（情绪曲线）"
+# pacing 自动投影：情绪曲线 → tracking/pacing.md 初稿（幂等 upsert；爽→高、紧张→中）
+grep -q "| 第2章 | 高 | 爽" tracking/pacing.md || fail "pacing 情绪强度未投影"
 
 # ---- 章函数：写一章的完整闭环 ----
 write_chapter() {
@@ -278,6 +280,7 @@ tx["character_snapshots"] = {
 }
 json.dump(tx, open(".story/tx-chapter-$(printf %03d "$N").json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 PY
+  python3 "$SKILL_DIR/scripts/tracking_commit.py" validate --project . --input ".story/tx-chapter-$(printf %03d "$N").json" >/dev/null || fail "validate $N"
   python3 "$SKILL_DIR/scripts/tracking_commit.py" commit --project . --input ".story/tx-chapter-$(printf %03d "$N").json" >/dev/null || fail "commit $N"
   python3 "$SKILL_DIR/scripts/pipeline.py" advance draft >/dev/null || fail "advance draft $N"
   python3 "$SKILL_DIR/scripts/coldread_material.py" --chapter "$N" --write-review >/dev/null || fail "coldread $N"
@@ -604,6 +607,46 @@ grep -q "seam-conflict" "$WORK/seam-conflict.txt" || fail "场景突变未报 se
 rm -rf chapters/chapter-003
 pass "check_seam 跨章拼接（延续通过/突变告警/退出码恒 0）"
 
+# ---- 写手发明申报：tx 填报 → 账本 → context.md → 下章 spec 自动带出 ----
+# （放在 seam 之后：secret-bad 块要求第 3 章未提交以测 known_by 拒收口径）
+python3 "$SKILL_DIR/scripts/pipeline.py" next-chapter >/dev/null || fail "next-chapter (inv)"
+python3 "$SKILL_DIR/scripts/new_chapter.py" --chapter 3 >/dev/null || fail "new_chapter (inv)"
+python3 "$SKILL_DIR/scripts/gen_transaction.py" commit --project . >/dev/null || fail "gen tx (inv)"
+python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path(".story/tx-chapter-003.json")
+tx = json.loads(p.read_text(encoding="utf-8"))
+tx["delta"]["result"] = "第3章：验证写手发明申报链路"
+tx["delta"]["inventions"] = ["主角家有一台红灯牌老收音机（计划外设定）"]
+tx["delta"]["character_changes"] = []
+tx["character_snapshots"] = {}
+tx["context"]["active_character_names"] = []
+p.write_text(json.dumps(tx, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
+python3 "$SKILL_DIR/scripts/tracking_commit.py" validate --project . --input .story/tx-chapter-003.json >/dev/null || fail "validate (inv)"
+python3 "$SKILL_DIR/scripts/tracking_commit.py" commit --project . --input .story/tx-chapter-003.json >/dev/null || fail "commit (inv)"
+# 直接手建第 4 章最小 spec（绕过状态机；只验证 assemble 的发明注入），断言后清理
+mkdir -p chapters/chapter-004
+printf '# 第 4 章写作蓝图\n## 大纲要点\n- [ ] 本章目标：\n## 前情衔接\n- \n' > chapters/chapter-004/spec.md
+SKILL_DIR="$SKILL_DIR" python3 - <<'PY' || fail "写手发明申报链路"
+import json, os, subprocess, sys
+from pathlib import Path
+skill = os.environ["SKILL_DIR"]
+state = json.loads(Path("tracking/_tracking-state.json").read_text(encoding="utf-8"))
+inv = state.get("inventions") or []
+assert any(i["chapter"] == 3 and "红灯牌" in i["text"] for i in inv), state.get("inventions")
+ctx = Path("tracking/context.md").read_text(encoding="utf-8")
+assert "## 写手发明" in ctx and "红灯牌" in ctx, ctx[:400]
+r = subprocess.run([sys.executable, f"{skill}/scripts/assemble_spec.py",
+                    "--chapter", "4", "--project", "."], capture_output=True, text=True)
+assert r.returncode == 0, r.stderr
+spec4 = Path("chapters/chapter-004/spec.md").read_text(encoding="utf-8")
+assert "写手发明" in spec4 and "红灯牌" in spec4, spec4[:600]
+print("✓ 写手发明申报：tx → 账本 → context.md → 下章 spec 自动带出")
+PY
+rm -rf chapters/chapter-003 chapters/chapter-004 .story/tx-chapter-003.json
+
 # ---- 终检 ----
 # 旧项目缺 ledger.md（v5 之前的老账本）：首次 check 应自动补写、不报错
 rm -f tracking/ledger.md
@@ -626,7 +669,192 @@ python3 "$SKILL_DIR/scripts/quality_trend.py" show >/dev/null || fail "趋势"
 # ---- deslop 检测器回归（正例命中/负例不误伤/BOM 豁免）----
 bash "$SKILL_DIR/tests/test_deslop_patterns.sh" || fail "deslop 检测器回归"
 
+# ---- M3 九章实测五缺陷修复回归（独立 mini 项目，不碰主线 rg1）----
+# 1. 归档提醒句均长判据（电报体：句均 < 基线下限×0.7 触发）
+# 2. assemble_spec 已填写 spec 跳过重组装（--force 不丢 AI 判断项）
+# 3. pacing 与伏笔计划冲突显式警告（缺失/无冲突不误报）
+# 4. schema 360B 字段超长报错带实际/上限字节数
+# 5. check_spec_copy 豁免引号内原文与纯专名短语（叙述句仍报）
+# 6. 写手档案：calibrate 实测基线 / 检测分层（基线/豁免/阈值）/ use 登记
+SKILL_DIR="$SKILL_DIR" WORK="$WORK" python3 - <<'PY' || fail "M3 九章实测五缺陷修复回归"
+import json, os, shutil, subprocess, sys
+from pathlib import Path
+
+SKILL = Path(os.environ["SKILL_DIR"])
+SCRIPTS = SKILL / "scripts"
+BASE = Path(os.environ["WORK"]) / "m3fix"
+if BASE.exists():
+    shutil.rmtree(BASE)
+BASE.mkdir(parents=True)
+sys.path.insert(0, str(SCRIPTS))
+
+# ---- 1. 句均长判据 ----
+import chapter_flow
+book = BASE / "book"
+(book / "chapters/chapter-001").mkdir(parents=True)
+author = BASE / ".novel"
+author.mkdir()
+(author / "style-anchor.md").write_text("- 平均句长：约 18~25 字\n", encoding="utf-8")
+telegraph = "林默出门。雨在下。他没带伞。巷口有人。他停下。听骨开。心跳声。六只。屋檐下。他数完。他记下。他走。"
+(book / "chapters/chapter-001/draft.md").write_text(telegraph, encoding="utf-8")
+alert = chapter_flow._sentence_len_alert(book, 1)
+assert alert and "电报体" in alert and "18" in alert, f"电报体应触发: {alert}"
+normal = ("林默把电动车停在巷口第三家面馆门口，抬头看了眼招牌上褪色的灯箱，确认接头人还没到。\n" * 4)
+(book / "chapters/chapter-001/draft.md").write_text(normal, encoding="utf-8")
+assert chapter_flow._sentence_len_alert(book, 1) is None, "正常句长不应触发"
+print("✓ 1. 句均长判据：电报体触发 / 正常句长不触发")
+
+# ---- 2. assemble_spec 防覆盖 ----
+from new_chapter import SPEC_TEMPLATE
+proj = BASE / "assemblespec"
+(proj / ".story").mkdir(parents=True)
+ch = proj / "chapters/chapter-002"
+ch.mkdir(parents=True)
+(ch / "spec.md").write_text(SPEC_TEMPLATE.format(n=2), encoding="utf-8")
+
+def run_assemble(*extra):
+    r = subprocess.run([sys.executable, str(SCRIPTS / "assemble_spec.py"),
+                        "--chapter", "2", "--project", str(proj), *extra],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return r.stdout
+
+run_assemble()
+t = (ch / "spec.md").read_text(encoding="utf-8") + "\n## 五问闸门结果\n- 一问：通过\n"
+t = t.replace("- 变化项：", "- 变化项：林默拿到接头地点")
+(ch / "spec.md").write_text(t, encoding="utf-8")
+before = (ch / "spec.md").read_text(encoding="utf-8")
+out = run_assemble()
+assert "跳过重新组装" in out and "--force" in out, out
+assert (ch / "spec.md").read_text(encoding="utf-8") == before, "已填写 spec 被改动"
+out = run_assemble("--force")
+after = (ch / "spec.md").read_text(encoding="utf-8")
+assert "林默拿到接头地点" in after and "## 五问闸门结果" in after, "--force 丢了 AI 判断项"
+print("✓ 2. assemble_spec：已填写跳过且逐字不变；--force 重组装不丢判断项")
+
+# ---- 3. pacing 冲突警告 ----
+foreshadows = """| ID | 内容 | 埋设章 | 计划回收章 | 状态 | 重要度 | 最近变更章 | 进度注记 |
+|---|---|---|---|---|---|---|---|
+| F006 | 苏九给病房换小纸鹤——折法复制林家血脉 | 第1章 | 第3章 | 推进 | 中 | 第1章 | |
+"""
+pacing = """## 节奏检查
+- 第 2 章建议强度：「中」+ 不直接推 F006 真相（让 F006 继续慢热，第 3 章或第 4 章再兑现）。
+"""
+p2 = BASE / "pacing"
+(p2 / ".story").mkdir(parents=True)
+(p2 / "tracking").mkdir(parents=True)
+(p2 / "tracking/foreshadows.md").write_text(foreshadows, encoding="utf-8")
+(p2 / "tracking/pacing.md").write_text(pacing, encoding="utf-8")
+ch2 = p2 / "chapters/chapter-002"
+ch2.mkdir(parents=True)
+(ch2 / "spec.md").write_text(SPEC_TEMPLATE.format(n=2), encoding="utf-8")
+r = subprocess.run([sys.executable, str(SCRIPTS / "assemble_spec.py"),
+                    "--chapter", "2", "--project", str(p2)], capture_output=True, text=True)
+assert r.returncode == 0, r.stdout + r.stderr
+spec = (ch2 / "spec.md").read_text(encoding="utf-8")
+fi = spec.split("## 伏笔指令")[1].split("## 题材要点")[0]
+assert "继续推进 F006" in fi, fi
+assert "⚠️ pacing 冲突：pacing 第 2 章安排不推进 F006" in fi, fi
+# pacing.md 缺失 → 静默跳过不误报
+p3 = BASE / "pacing-missing"
+(p3 / ".story").mkdir(parents=True)
+(p3 / "tracking").mkdir(parents=True)
+(p3 / "tracking/foreshadows.md").write_text(foreshadows, encoding="utf-8")
+ch3 = p3 / "chapters/chapter-002"
+ch3.mkdir(parents=True)
+(ch3 / "spec.md").write_text(SPEC_TEMPLATE.format(n=2), encoding="utf-8")
+r = subprocess.run([sys.executable, str(SCRIPTS / "assemble_spec.py"),
+                    "--chapter", "2", "--project", str(p3)], capture_output=True, text=True)
+assert r.returncode == 0
+assert "pacing 冲突" not in (ch3 / "spec.md").read_text(encoding="utf-8")
+print("✓ 3. pacing 冲突：显式警告入 spec；缺失时静默跳过")
+
+# ---- 4. schema 360B 报错 ----
+sys.path.insert(0, str(SCRIPTS / "_tracking"))
+import schema
+try:
+    schema.clean_text("测" * 124, "context.recent_chapters[0].summary", max_bytes=360)
+    raise AssertionError("370B 汉字 summary 未被拒收")
+except schema.TrackingError as e:
+    msg = str(e)
+    assert "372 字节" in msg and "360 字节" in msg and "压缩" in msg, msg
+print("✓ 4. schema 超长报错带实际/上限字节数与压缩指引")
+
+# ---- 5. check_spec_copy 豁免 ----
+cp = BASE / "copy"
+(cp / ".story").mkdir(parents=True)
+ch5 = cp / "chapters/chapter-001"
+ch5.mkdir(parents=True)
+(ch5 / "spec.md").write_text("""## 大纲要点（履约清单，逐条勾选）
+- [ ] 本章目标：林默把电动车停在巷口第三家面馆门口等接头人出现
+- [ ] 场景安排：城西第七人民医院家属等候区东侧的老街巷口
+- [ ] 关键事件：周琳给林默发短信「明晚 22:00 双井口旧街 23 号锚点见面别迟到」约定接头
+""", encoding="utf-8")
+(ch5 / "draft.md").write_text("""林默把电动车停在巷口第三家面馆门口，抬头看了眼招牌。
+他在城西第七人民医院家属等候区东侧那条老街的东头巷口下了车。
+周琳给他发了条短信：「明晚 22:00 双井口旧街 23 号锚点见面别迟到」。
+""", encoding="utf-8")
+r = subprocess.run([sys.executable, str(SCRIPTS / "check_spec_copy.py"),
+                    "--project", str(cp), "--chapter", "1", "--json"],
+                   capture_output=True, text=True)
+hits = json.loads(r.stdout)["hits"]
+assert len(hits) == 1 and "把电动车停在巷口第三家面馆门口" in hits[0]["copied"], hits
+print("✓ 5. check_spec_copy：动作句仍报；专名地名与引号内短信原文豁免")
+
+# ---- 6. 写手档案（yeyue/Minimax M3 单写手）----
+cal = BASE / "cal"
+wbook = cal / "book"
+(wbook / ".story").mkdir(parents=True)
+(wbook / "chapters/chapter-001").mkdir(parents=True)
+cal_author = cal / ".novel"
+cal_author.mkdir(parents=True)
+# 作者锚基线 18~25（触发线 12.6）；写手样本句均 12 字 → 档案基线 10~14（触发线 7.0）
+(cal_author / "style-anchor.md").write_text("- 平均句长：约 18~25 字\n", encoding="utf-8")
+sample = "他沿着长街一直往前跑过去。\n" * 5
+(wbook / "chapters/chapter-001/draft.md").write_text(sample, encoding="utf-8")
+
+def run_wp(*extra):
+    r = subprocess.run([sys.executable, str(SCRIPTS / "writer_profile.py"), *extra],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return r.stdout
+
+run_wp("calibrate", "--project", str(wbook), "--chapters", "1")
+prof_file = cal_author / "writer.md"
+assert prof_file.exists(), "写手档案未生成"
+prof_text = prof_file.read_text(encoding="utf-8")
+assert "平均句长：约 10~14 字" in prof_text, prof_text
+
+# 基线分层：句均 8 字——作者锚会报（8<12.6），写手档案不报（8≥7.0）
+from writer_profile import load_profile, verdict_threshold
+(wbook / "chapters/chapter-001/draft.md").write_text("他沿着长街一路跑。\n" * 5, encoding="utf-8")
+assert chapter_flow._sentence_len_alert(wbook, 1) is None, "写手档案基线未生效（按作者锚误报）"
+(wbook / "chapters/chapter-001/draft.md").write_text("他跑。雨大。\n" * 5, encoding="utf-8")
+alert = chapter_flow._sentence_len_alert(wbook, 1)
+assert alert and "yeyue" in alert and "电报体" in alert, alert
+
+# 豁免/阈值分层：档案登记 em-dash 豁免 → _style_anchor_allows_dash 真值优先于作者锚
+prof_file.write_text(prof_text.replace(
+    "## AI 味倾向（校准实测 + 处置裁定）\n格式：`- 检测类型 ｜ 豁免|盯防 ｜ 备注（可含 阈值=N）`",
+    "## AI 味倾向（校准实测 + 处置裁定）\n格式：`- 检测类型 ｜ 豁免|盯防 ｜ 备注（可含 阈值=N）`\n"
+    "- em-dash ｜ 豁免 ｜ 该写手文风合法形态"), encoding="utf-8")
+import checks as _checks
+assert _checks._style_anchor_allows_dash(wbook) is True, "写手档案 em-dash 豁免未生效"
+assert verdict_threshold({"verdict": "盯防", "note": "阈值=14"}, 8) == 14.0
+assert verdict_threshold({"verdict": "豁免", "note": ""}, 8) is None
+assert verdict_threshold(None, 8) == 8
+
+# show 回读（未校准的书 → 回退提示；独立作者根避免共享上面的档案）
+assert "本书写手：yeyue" in run_wp("show", "--project", str(wbook))
+empty_root = cal.parent / "cal-empty"
+(empty_root / ".novel").mkdir(parents=True)
+empty_book = empty_root / "book"
+(empty_book / ".story").mkdir(parents=True)
+assert "回退" in run_wp("show", "--project", str(empty_book))
+print("✓ 6. 写手档案：calibrate 实测基线 / 检测分层（基线/豁免/阈值）/ show 回读")
+PY
+
 echo
 echo "🎉 回归测试全部通过：init → outline → 2 章闭环 → override 账本 →"
 echo "   ledger 派生视图 → 誓约/秘密检测 → 死亡铁律 → 选角出场 → 规则双投影 → seam 拼接 →"
-echo "   导出 → 终检（含 ledger 补写/篡改拒收）→ deslop 检测器"
+echo "   导出 → 终检（含 ledger 补写/篡改拒收）→ deslop 检测器 → M3 五缺陷修复 → 写手档案"

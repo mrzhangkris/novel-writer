@@ -285,6 +285,22 @@ def merge_transaction(
         existing_overrides.add(key)
         next_state["overrides"].append(override)
 
+    # 写手发明申报：正文确立的计划外设定按章记账；修订该章时整章替换（防改稿后发明悬空）。
+    # 章级事实不随 touches_present 回退——改旧稿不改变「那章发明过什么」。
+    if transaction["delta"].get("inventions"):
+        prior = [
+            item
+            for item in next_state.get("inventions", [])
+            if item["chapter"] != chapter
+        ]
+        prior.extend(
+            {"chapter": chapter, "text": text}
+            for text in transaction["delta"]["inventions"]
+        )
+        next_state["inventions"] = sorted(
+            prior, key=lambda item: (item["chapter"], item["text"])
+        )
+
     recent_by_chapter = {
         item["chapter"]: item for item in state["context"]["recent_chapters"]
     }

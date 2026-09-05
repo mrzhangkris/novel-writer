@@ -17,13 +17,11 @@ import re
 import sys
 from pathlib import Path
 
+from _textstat import cjk_len
+
 SENT_END = "。！？!?…"
 PUNCT = {"，", "。", "！", "？", "；", "：", "、", "…", "——", "「", "」"}
 EMOTION_MARKERS = re.compile(r"！|!|？|\?|破防|泪|笑|怒|惊|慌|颤|抖|攥|冲|奔")
-
-
-def cjk_len(s: str) -> int:
-    return len(re.findall(r"[\u4e00-\u9fff]", s))
 
 
 def sentences(text: str) -> list[str]:

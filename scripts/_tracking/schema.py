@@ -13,7 +13,8 @@ from typing import Any
 INPUT_SCHEMA_VERSION = 2  # v1 事务（无 items/secrets/pledges/plot_points）仍被接受
 TRACKING_SCHEMA_VERSION = 5  # v5：+items/secrets/pledges 维度、snapshot.alive、context.active_scene；v4 账本缺省键按空处理
 DELTA_TARGET_BYTES = 1536
-DELTA_MAX_BYTES = 3072
+# 4096：双伏笔章实测 3072 差 1 字节爆表（knowledge 数组是大头）；1536 仍为软目标
+DELTA_MAX_BYTES = 4096
 CONTEXT_TARGET_BYTES = 8192
 CONTEXT_MAX_BYTES = 12288
 SNAPSHOT_TARGET_BYTES = 4096
@@ -24,6 +25,7 @@ CONTEXT_HEADINGS = (
     "## 长期约束",
     "## 核心角色状态",
     "## 活跃伏笔",
+    "## 写手发明",
     "## 近三章速记",
     "## 下一章承诺",
     "## 连贯性风险",
@@ -129,8 +131,10 @@ def clean_text(
     require(isinstance(value, str), f"{label} must be a string")
     cleaned = " ".join(value.replace("|", "｜").split())
     require(allow_empty or bool(cleaned), f"{label} must not be empty")
+    cleaned_bytes = len(cleaned.encode("utf-8"))
     require(
-        len(cleaned.encode("utf-8")) <= max_bytes, f"{label} exceeds {max_bytes} bytes"
+        cleaned_bytes <= max_bytes,
+        f"{label} 超长：实际 {cleaned_bytes} 字节 / 上限 {max_bytes} 字节，请压缩（如 summary 只留本章净变化）",
     )
     return cleaned
 
@@ -780,6 +784,34 @@ def normalize_overrides_state(
         overrides.append(row)
     return overrides
 
+def normalize_inventions_state(
+    value: object, last_chapter: int
+) -> list[dict[str, Any]]:
+    """写手发明申报的存量账：[{chapter, text}]，按章记录（修订整章替换）。"""
+    inventions = as_list(value, "tracking state.inventions")
+    out: list[dict[str, Any]] = []
+    for index, raw in enumerate(inventions):
+        item = as_mapping(raw, f"tracking state.inventions[{index}]")
+        require_known_keys(
+            item, {"chapter", "text"}, f"tracking state.inventions[{index}]"
+        )
+        chap = as_int(item.get("chapter"), f"tracking state.inventions[{index}].chapter")
+        require(
+            1 <= chap <= last_chapter,
+            f"tracking state.inventions[{index}] chapter {chap} exceeds last committed chapter",
+        )
+        out.append(
+            {
+                "chapter": chap,
+                "text": clean_text(
+                    item.get("text"),
+                    f"tracking state.inventions[{index}].text",
+                    max_bytes=360,
+                ),
+            }
+        )
+    return out
+
 def normalize_delta(
     value: object,
     *,
@@ -805,6 +837,7 @@ def normalize_delta(
             "retired_characters",
             "new_abilities",
             "rule_overrides",
+            "inventions",
         },
         "delta",
     )
@@ -969,6 +1002,14 @@ def normalize_delta(
         "retired_characters": retired_characters,
         "new_abilities": new_abilities,
         "rule_overrides": rule_overrides,
+        # 写手发明申报：正文确立的计划外设定/人物/事实（一句一条，≤6 条）。
+        # 进账本后下一章 spec 组装可见——防写手发明与后续章纲静默冲突。
+        "inventions": clean_string_list(
+            delta.get("inventions", []),
+            "delta.inventions",
+            maximum=6,
+            item_max_bytes=360,
+        ),
     }
 
 def normalize_state(document: object) -> dict[str, Any]:
@@ -990,6 +1031,7 @@ def normalize_state(document: object) -> dict[str, Any]:
             "pledges",
             "overrides",
             "threads",
+            "inventions",
         },
         "tracking state",
     )
@@ -1073,6 +1115,9 @@ def normalize_state(document: object) -> dict[str, Any]:
         "pledges": pledges,
         "overrides": overrides,
         "threads": validate_threads(root.get("threads", {})),
+        "inventions": normalize_inventions_state(
+            root.get("inventions", []), last_chapter
+        ),
     }
 
 def normalize_initial_document(document: object) -> dict[str, Any]:

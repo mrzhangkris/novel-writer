@@ -7,10 +7,11 @@
 本章时间推进、钩子设计），不再手工抄文件——抄写是 AI 出错的重灾区。
 
 用法：
-  assemble_spec.py --chapter N [--project 书目录]
+  assemble_spec.py --chapter N [--project 书目录] [--force]
   （先 new_chapter.py --chapter N 建模板，再跑本脚本填内容）
 
-只填充空位：已写内容（含 AI 之前的创作）不被覆盖。
+只填充空位：已写内容（含 AI 之前的创作）不被覆盖。spec 已被 AI 填写判断项
+（五问闸门/净变化/时间线等有值）时整次跳过，防覆盖丢稿；--force 强制重组装。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import re
 from pathlib import Path
 
 from _common import PIPELINE_FILE, find_project_root, read_json
+from writer_profile import WRITER_MODEL, WRITER_NAME, author_root, load_profile
 
 SPEC_DIR_TMPL = "chapters/chapter-{chapter:03d}"
 SECTION_RE = re.compile(r"^## (.+)$")
@@ -78,15 +80,6 @@ def playbook_reminders(root: Path) -> list[str]:
 def book_root(args) -> Path | None:
     start = Path(args.project) if args.project else Path.cwd()
     return find_project_root(start, child=".story")
-
-
-def author_root(root: Path) -> Path | None:
-    cur = root
-    while cur != cur.parent:
-        if (cur / ".novel").is_dir():
-            return cur
-        cur = cur.parent
-    return None
 
 
 def read_text(path: Path) -> str:
@@ -175,6 +168,96 @@ def chapter_in(text: str, chapter: int) -> bool:
     return bool(re.search(rf"第\s*{chapter}\s*章", text))
 
 
+FILLED_FIELD_RE = re.compile(r"-\s*(变化项|主角代价/取舍|本章开头时间点|距上章过去)[：:]\s*(.*)")
+GATE_SECTION_RE = re.compile(r"(?m)^## 五问闸门结果[^\n]*\n(.*?)(?=\n## |\Z)", re.DOTALL)
+
+
+def spec_filled(spec: str) -> bool:
+    """spec 是否已被 AI 填写过判断项（模板与 assemble 自动填充均不算）。
+
+    判据（任一命中即算已填写）：
+    1. 「五问闸门结果」节存在且非空——new_chapter 模板没有该节，出现即 AI 亲手加的；
+    2. 判断项字段已填值——模板/assemble 的占位均为空标签、「待定」或（括号说明）。
+    误判「已填」的代价是少组装一次（--force 可重跑）；误判「未填」会走原路径，
+    各节有 section_empty 守卫兜底，不会覆盖 AI 内容。
+    """
+    m = GATE_SECTION_RE.search(spec)
+    if m and m.group(1).strip():
+        return True
+    for line in spec.splitlines():
+        fm = FILLED_FIELD_RE.match(line.strip())
+        if not fm:
+            continue
+        value = fm.group(2).strip()
+        if value and value != "待定" and not value.startswith("（"):
+            return True
+    return False
+
+
+def parse_pacing_stance(root: Path, chapter: int) -> dict | None:
+    """解析 tracking/pacing.md 中对本章的节奏定位（强度 + 显式「不推进」的伏笔）。
+
+    返回 {"intensity": "低/中/高"|None, "holds": {FID,...}}；pacing.md 缺失、
+    为空或两者都解析不出时返回 None——冲突检测是 advisory，宁缺勿误报。
+    """
+    text = read_text(root / "tracking" / "pacing.md")
+    if not text.strip():
+        return None
+    intensity = None
+    m = re.search(rf"^\|\s*第\s*{chapter}\s*章\s*\|\s*(低|中|高)\s*\|", text, flags=re.MULTILINE)
+    if m:
+        intensity = m.group(1)
+    holds: set[str] = set()
+    # 「不推进 F00x」只在与本章号同句时才算对本章的安排（按 。；\n 分句），
+    # 避免把「第 8 章……F006 不推进」误当成第 9 章的约束。
+    for seg in re.split(r"[。；\n]", text):
+        if not re.search(rf"第\s*{chapter}\s*章", seg):
+            continue
+        if re.search(r"不(?:直接)?推进?|慢热", seg):
+            holds.update(pad_fid(f) for f in re.findall(r"F\d{1,4}", seg))
+    if intensity is None and not holds:
+        return None
+    return {"intensity": intensity, "holds": holds}
+
+
+def pacing_conflict_lines(root: Path, chapter: int, actions: dict[str, str]) -> list[str]:
+    """pacing 定位与伏笔台账本章动作冲突时，返回 spec 伏笔指令区的警告行。
+
+    pacing 是节奏最高权威：冲突不替 AI 仲裁，但必须显式摆进 spec——
+    靠 agent 自己翻 pacing 发现冲突是赌运气（M3 第 9 章 F006 实证）。
+    """
+    stance = parse_pacing_stance(root, chapter)
+    if stance is None:
+        return []
+    out = []
+    for fid in sorted(actions):
+        action = actions[fid]
+        if stance["intensity"] == "低":
+            out.append(
+                f"- ⚠️ pacing 冲突：pacing 将第 {chapter} 章定位为低强度缓冲章，"
+                f"但 {fid} 计划本章{action}——以 pacing 为准，调整伏笔动作"
+            )
+        if fid in stance["holds"]:
+            out.append(
+                f"- ⚠️ pacing 冲突：pacing 第 {chapter} 章安排不推进 {fid}，"
+                f"但本指令要求{action}——以 pacing 为准，调整伏笔动作"
+            )
+    return out
+
+
+def parse_inventions(root: Path) -> list[dict]:
+    """读账本里的写手发明申报（[{chapter, text}]）。
+
+    发明是写手在正文中确立的计划外设定，进账本后从这里注入后续章 spec——
+    防写手发明与章纲/后文静默冲突（M3 第 3 章「601 哑巴孙女」实证）。"""
+    state = read_json(root / "tracking" / "_tracking-state.json")
+    if isinstance(state, dict):
+        inv = state.get("inventions")
+        if isinstance(inv, list):
+            return [i for i in inv if isinstance(i, dict) and i.get("text")]
+    return []
+
+
 def parse_context(root: Path) -> dict:
     text = read_text(root / "tracking" / "context.md")
     pos = {"当前章": "", "卷": "", "故事时间": "", "场景": ""}
@@ -248,18 +331,21 @@ def character_line(root: Path, name: str) -> str:
     return f"- {name}｜{'；'.join(parts)}" if parts else f"- {name}（见 tracking/characters/{name}.md）"
 
 
-def style_lines(root: Path) -> list[str]:
+def anchor_lines(root: Path) -> list[str]:
+    """作者级 style-anchor 的可注入行（人称/视角纪律 + 本书不用的腔调）。
+
+    未填锚的占位/示例行（____、{如…}，含「- {如…}」形式）一律跳过，防泄漏进 spec。"""
     anchor = read_text(root / ".novel" / "style-anchor.md")
     lines = []
     for line in anchor.splitlines():
-        if "____" in line or "（第一/第三）" in line or "单视角 / 多视角" in line or line.startswith("{如"):
+        if "____" in line or "（第一/第三）" in line or "单视角 / 多视角" in line or "{如" in line:
             continue
         m = re.match(r"-\s*(人称|视角纪律)[：:]\s*(.*)", line)
         if m:
             lines.append(f"- {m.group(1)}：{m.group(2).strip()}")
     in_banned = False
     for line in anchor.splitlines():
-        if "____" in line or line.startswith("{如"):
+        if "____" in line or "{如" in line:
             continue
         if line.startswith("## 本书不用的腔调"):
             in_banned = True
@@ -270,24 +356,32 @@ def style_lines(root: Path) -> list[str]:
             lines.append(line)
             if len(lines) >= 6:
                 break
-    # 语病避雷（写作时必守，前置约束；checks 语病模式扫描兜底。清单 ≤8 条，
-    # 全部「症状→正解」格式且可 grep 二值验证——约束越多模型越无视，不堆禁令）
-    lines.append("## 语病避雷（写作时必守，写完自校）")
-    lines.extend([
-        "- 主语让位给「通过/随着」：不写「通过改革使公司变好」→写「改革让公司变好」",
-        "- 句式不杂糅：不写「据数据显示/原因是由于/目的是为了」→各留一个（数据显示/原因是/目的是）",
-        "- 否定只加一层：不写「避免不迟到」→写「避免迟到」",
-        "- 数量表达说人话：不写「降低三倍/大约五十人左右」→写「降到三分之一/大约五十人」",
-        "- 不写悬空同位语：「需求文档，第十七版。」→写「已经改到第十七版」",
-        "- 数量与并列不冲突：不写「就剩他一个，和灯」→写「只剩他和灯」或拆成两句",
-        "- 数量定语放对位置：不写「亮着三分之一的灯」→写「还有三分之一的灯亮着」",
-        "- 关联词不错配：不写「不仅…但…」→写「不仅…而且…」",
-        "- 比喻不与本体重复：不写「亮着一半，像一盏半明半暗的灯」→换喻体或删",
-        "- 不堆砌赘余词：不写「凯旋归来/免费赠送/十分非常」→写「凯旋/赠送/非常」",
-        "- 用字不混：的得地分清（跑得很快/轻轻地说）；不写「既使/按装/必竟」→「即使/安装/毕竟」",
-        "- 写完换读者身份用 Read 重读 draft.md：先逐句读通顺，再对照本清单扫一遍，不通的当场改（开头 500 字逐句精读）",
-    ])
     return lines
+
+
+# 语病避雷（写作时必守，前置约束；checks 语病模式扫描兜底。清单 ≤8 条，
+# 全部「症状→正解」格式且可 grep 二值验证——约束越多模型越无视，不堆禁令）。
+# 作为独立小节落盘，不嵌进风格指令节内容（防节边界解析错位）。
+YUBING_HEADER = "## 语病避雷（写作时必守，写完自校）"
+YUBING_LINES = [
+    "- 主语让位给「通过/随着」：不写「通过改革使公司变好」→写「改革让公司变好」",
+    "- 句式不杂糅：不写「据数据显示/原因是由于/目的是为了」→各留一个（数据显示/原因是/目的是）",
+    "- 否定只加一层：不写「避免不迟到」→写「避免迟到」",
+    "- 数量表达说人话：不写「降低三倍/大约五十人左右」→写「降到三分之一/大约五十人」",
+    "- 不写悬空同位语：「需求文档，第十七版。」→写「已经改到第十七版」",
+    "- 数量与并列不冲突：不写「就剩他一个，和灯」→写「只剩他和灯」或拆成两句",
+    "- 数量定语放对位置：不写「亮着三分之一的灯」→写「还有三分之一的灯亮着」",
+    "- 关联词不错配：不写「不仅…但…」→写「不仅…而且…」",
+    "- 比喻不与本体重复：不写「亮着一半，像一盏半明半暗的灯」→换喻体或删",
+    "- 不堆砌赘余词：不写「凯旋归来/免费赠送/十分非常」→写「凯旋/赠送/非常」",
+    "- 用字不混：的得地分清（跑得很快/轻轻地说）；不写「既使/按装/必竟」→「即使/安装/毕竟」",
+    "- 写完换读者身份用 Read 重读 draft.md：先逐句读通顺，再对照本清单扫一遍，不通的当场改（开头 500 字逐句精读）",
+]
+
+
+def style_lines(root: Path) -> list[str]:
+    """兼容入口：anchor 行 + 语病避雷整节（旧调用方语义）。"""
+    return anchor_lines(root) + [YUBING_HEADER] + YUBING_LINES
 
 
 def card_hook_lines(root: Path) -> list[str]:
@@ -308,12 +402,16 @@ def foreshadow_lines(root: Path, chapter: int, outline_plants: list[str]) -> lis
     rows = parse_foreshadow_table(read_text(root / "tracking" / "foreshadows.md"))
     lines = []
     closed = []
+    actions: dict[str, str] = {}  # FID → 本章动作（回收/推进），供 pacing 冲突比对
     for row in rows:
+        fid = pad_fid(row["id"])
         if row["status"] == "已埋":
             if chapter_in(row["planned"], chapter):
                 lines.append(f"- 回收 {row['id']}：{row['summary'][:40]}（计划回收 {row['planned']}）")
+                actions[fid] = "回收"
             elif chapter_in(row["planned"], chapter + 1) or chapter_in(row["planned"], chapter + 2):
                 lines.append(f"- 推进 {row['id']}：临近回收（{row['planned']}），本章为回收铺垫")
+                actions[fid] = "推进"
         elif row["status"] == "推进":
             # 进度注记：让「推进」态有进度载体，spec 里与「已埋」有本质区别
             # （推进到哪里、还差什么）；未填时退回无注记的通用指令。
@@ -322,6 +420,7 @@ def foreshadow_lines(root: Path, chapter: int, outline_plants: list[str]) -> lis
                 f"- 继续推进 {row['id']}：{row['summary'][:40]}（引信已落地{progress}，"
                 f"本章保持可见或再推进一步，计划回收 {row['planned']}）"
             )
+            actions[fid] = "推进"
         elif row["status"] in ("已回收", "已过期", "放弃"):
             closed.append(f"{row['id']}（{row['summary'][:30]}）")
     lines.extend(outline_plants)
@@ -331,6 +430,7 @@ def foreshadow_lines(root: Path, chapter: int, outline_plants: list[str]) -> lis
         shown = closed[-20:]
         suffix = f"（共 {len(closed)} 条，仅列最近 {len(shown)} 条）" if len(closed) > 20 else ""
         lines.append(f"- ⛔ 已了结，本章严禁重复写或再当悬念用{suffix}：{'、'.join(shown)}")
+    lines.extend(pacing_conflict_lines(root, chapter, actions))
     return lines
 
 
@@ -349,12 +449,21 @@ def section_empty(content: str) -> bool:
     return True
 
 
-def assemble(root: Path, chapter: int) -> str:
+def assemble(root: Path, chapter: int, force: bool = False) -> tuple[Path, bool]:
+    """组装 spec 的确定性部分。返回 (spec 路径, 是否跳过)。
+
+    spec 已被 AI 填写判断项时跳过（防覆盖丢稿——M3 第 9 章被迫「备份→跑→恢复」
+    绕过的正是这条路径）；--force 保留强制重组装能力（逐节 section_empty
+    守卫仍在，AI 填过的节也不会被覆盖）。
+    """
     spec_path = root / SPEC_DIR_TMPL.format(chapter=chapter) / "spec.md"
     if not spec_path.exists():
         print(f"❌ spec 不存在：{spec_path}（先跑 new_chapter.py --chapter {chapter}）")
         raise SystemExit(1)
     spec = read_text(spec_path)
+    if spec_filled(spec) and not force:
+        print("✅ spec 已填写，跳过重新组装（保留 AI 判断项；如需重置用 --force）")
+        return spec_path, True
 
     outline = read_text(root / "outline.md")
     fields = parse_outline_chapter(outline, chapter)
@@ -364,7 +473,13 @@ def assemble(root: Path, chapter: int) -> str:
     known, unknown = parse_timeline(root)
     chars = active_characters(root)
     author = author_root(root)
-    style = style_lines(author) if author else []
+    style = anchor_lines(author) if author else []
+    # 写手档案（AI 味与文风纠缠，按写手实测校准）：spec 标注本书写手，并把
+    # 写前避开项注入风格指令——检测分层在写后，这里管写前
+    writer_prof = load_profile(author)
+    if writer_prof:
+        style.insert(0, f"- 当前写手：{WRITER_NAME}（{WRITER_MODEL}；风格基线与 AI 味提醒阈值按写手档案校准）")
+        style.extend(f"- 写手避开：{item}" for item in writer_prof["avoid"])
     hooks = card_hook_lines(root)
     fores = foreshadow_lines(root, chapter, plants)
 
@@ -380,8 +495,23 @@ def assemble(root: Path, chapter: int) -> str:
             return
         spec = spec[: m.start()] + f"## {title}\n{content}\n" + spec[m.end() :]
 
-    # 大纲要点：只填空位
+    # 大纲要点：只填空位；未开写章（无 [x] 勾选）内容随新大纲自动刷新——
+    # 已写章的履约清单是写作存档不动；防「改了大纲旧 spec 还指旧计划」
     checklist = section("大纲要点")
+    fresh_points = "\n".join(
+        f"- [ ] {label}：{fields[label]}"
+        for label in ("本章目标", "场景安排", "关键事件", "章末钩子")
+        if label in fields
+    )
+    if (
+        fresh_points
+        and checklist.strip()
+        and "[x]" not in checklist
+        and checklist.strip() != fresh_points
+    ):
+        checklist = fresh_points + "\n"
+        replace_section("大纲要点", checklist)
+        print("   大纲要点已随新大纲更新（本章未开写）")
     for label in ("本章目标", "场景安排", "关键事件", "章末钩子"):
         if label not in fields:
             continue
@@ -425,6 +555,10 @@ def assemble(root: Path, chapter: int) -> str:
                 tail = prev_draft.strip()[-120:]
                 lines.append("- 上章结尾原文（衔接锚，本章开头必须从这里延续）：")
                 lines.append(f"  「{tail}」")
+        inv = parse_inventions(root)
+        if inv:
+            lines.append("- 写手发明（前文计划外确立的设定/人物/事实，本章不得与之矛盾）：")
+            lines.extend(f"  - （第{i['chapter']}章）{i['text']}" for i in inv[-6:])
         replace_section("前情衔接", "\n".join(lines) + "\n")
 
     # 知情边界
@@ -452,6 +586,16 @@ def assemble(root: Path, chapter: int) -> str:
     fi = section("伏笔指令")
     if section_empty(fi):
         replace_section("伏笔指令", ("\n".join(fores) + "\n") if fores else "- 本章无伏笔动作\n")
+    else:
+        # 已组装过的 spec：只补缺失的「植入」行（随新大纲新增的伏笔），不覆盖 AI 注记
+        missing = [
+            line
+            for line in fores
+            if line.startswith("- 植入 ") and line.split("：", 1)[0] not in fi
+        ]
+        if missing:
+            replace_section("伏笔指令", fi.rstrip("\n") + "\n" + "\n".join(missing) + "\n")
+            print("   伏笔指令已补充缺失植入行（随新大纲）")
 
     # 题材要点
     tp = section("题材要点")
@@ -497,29 +641,23 @@ def assemble(root: Path, chapter: int) -> str:
     except (ValueError, OSError, ImportError):
         pass
 
-    # 风格指令
+    # 风格指令（写手行 + anchor 腔调行）；语病避雷独立成节，见下
     st = section("风格指令")
-    if section_empty(st) and (not style or all("style-anchor" in l or "空" in l for l in style)):
+    if section_empty(st) and not style:
         style.insert(0, "- ⚠️ 文风锚为空模板：本书暂无文风约束，AI 生成易滑向单一腔调。建议尽快回填 .novel/style-anchor.md（腔调 3 词 + 样板段落）")
     if section_empty(st):
         style += playbook_reminders(root)
         replace_section("风格指令", "\n".join(style) + "\n")
-    elif "语病避雷" not in st and "## 语病避雷" not in spec:
-        # 已组装的 spec：追加语病避雷节（含质量反哺），不覆盖 AI 填过的内容。
-        # 双重防重：风格指令节内与全 spec 任一位置已有该节都不再追加
-        #（历史上 replace 目标不匹配会静默失败 → 每次重跑堆积一份）
-        # 与主路径同源：读作者级 style-anchor（root 参数是历史误用，书根无 .novel/）
-        avoid = style_lines(author) if author else []
-        if "## 语病避雷（写作时必守，写完自校）" in avoid:
-            avoid = [l for l in avoid if l.startswith("## ") or l.startswith("- ")]
-            block = "\n".join(l for l in avoid[avoid.index("## 语病避雷（写作时必守，写完自校）"):])
-        else:
-            block = ""
+    if YUBING_HEADER not in spec:
+        # 语病避雷独立小节：紧跟风格指令节追加，不覆盖 AI 填过的内容。
+        # 双重防重：全 spec 已有该节就不再追加（历史上 replace 目标不匹配会
+        # 静默失败 → 每次重跑堆积一份）
         extra = [l for l in style if l.startswith("- （质量反哺）")]
-        if extra:
-            block += "\n" + "\n".join(extra)
-        if block.strip() and ("## 风格指令\n" + st) in spec:
-            spec = spec.replace("## 风格指令\n" + st, "## 风格指令\n" + st.rstrip("\n") + "\n\n" + block + "\n")
+        block = "\n".join([YUBING_HEADER] + YUBING_LINES + extra)
+        st2 = section("风格指令")
+        anchor_head = f"## 风格指令\n{st2}" if st2 else None
+        if anchor_head and anchor_head in spec:
+            spec = spec.replace(anchor_head, anchor_head.rstrip("\n") + "\n\n" + block + "\n")
             print("   已追加：语病避雷（写作时必守）+ 质量反哺")
 
     # 本章净变化 + 主角代价（红线 3 无后果 / 特质 3 选择有代价 的落点字段）
@@ -537,19 +675,23 @@ def assemble(root: Path, chapter: int) -> str:
         replace_section("章节定位", "- （铺垫 / 推进 / 高潮 / 收束，四选一，按大纲结构标记）\n")
 
     spec_path.write_text(spec, encoding="utf-8")
-    return spec_path
+    return spec_path, False
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="组装章节蓝图（确定性部分自动填）")
     parser.add_argument("--chapter", type=int, required=True)
     parser.add_argument("--project", type=Path, default=None)
+    parser.add_argument("--force", action="store_true",
+                        help="spec 已填写时仍强制重组装（已填节仍有守卫，不覆盖判断项）")
     args = parser.parse_args()
     root = book_root(args)
     if root is None:
         print("❌ 不在项目中")
         return 1
-    out = assemble(root, args.chapter)
+    out, skipped = assemble(root, args.chapter, force=args.force)
+    if skipped:
+        return 0
     print(f"✅ spec 已组装：{out}")
     print("   已自动填：大纲要点/概念预算提示/角色要点/前情衔接/知情边界/时间线定位/伏笔指令/题材要点/风格指令/规则注入")
     print("   AI 只需补：概念取舍、本章故事时间推进、钩子设计等判断项")

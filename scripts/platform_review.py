@@ -19,6 +19,7 @@ import statistics
 from pathlib import Path
 
 from _common import find_project_root
+from _textstat import cjk_len, split_sentences
 
 CONNECTORS = [
     "首先", "其次", "再次", "然后", "最后", "总之", "总的来说", "综上所述",
@@ -44,12 +45,8 @@ def load_sensitive_words(skill_dir: Path) -> list[str]:
     return words
 
 
-def cjk_count(text: str) -> int:
-    return len(re.findall(r"[\u4e00-\u9fff]", text))
-
-
 def review_text(text: str, label: str, words: list[str], strict: bool = False) -> int:
-    cjk = cjk_count(text)
+    cjk = cjk_len(text)
     problems = 0
 
     # 1) 敏感词
@@ -69,8 +66,8 @@ def review_text(text: str, label: str, words: list[str], strict: bool = False) -
         )
 
     # 3) 句长突发性
-    sents = [s for s in re.split(r"[。！？；\n]", text) if s.strip()]
-    sent_lens = [cjk_count(s) for s in sents]
+    sents = split_sentences(text)
+    sent_lens = [cjk_len(s) for s in sents]
     if len(sent_lens) >= 10:
         mean = statistics.mean(sent_lens)
         sd = statistics.pstdev(sent_lens)
