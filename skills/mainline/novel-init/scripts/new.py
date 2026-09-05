@@ -166,7 +166,15 @@ def main():
         print(f"错误：模板库不存在：{templates_dir}，请先跑 setup.py", file=sys.stderr)
         return 2
 
-    # 2. 防覆盖
+    # 2. slug 合法性：目录名只允许英文/数字/-/_（防路径穿越与平台差异）
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", args.slug or ""):
+        print(
+            f"错误：slug 只允许英文字母/数字/-/_（1-64 位），收到「{args.slug}」；中文书名请用 --title",
+            file=sys.stderr,
+        )
+        return 2
+
+    # 3. 防覆盖
     book_root = os.path.join(root, args.slug)
     if os.path.isdir(book_root) and os.listdir(book_root) and not args.force:
         print(

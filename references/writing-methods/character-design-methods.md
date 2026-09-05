@@ -478,7 +478,7 @@
 2. 重命名文件（保持原名也可，加 frontmatter `card_type: detailed` 更清晰）
 3. 切换模板到 `character-card.md`
 4. 补全个人故事四件套
-5. 跑 `migration_upgrade.py` 确认分类正确
+5. 校验：`checks.py outline`（详卡四件套是硬门禁）
 
 ### 双层卡的常见误区
 

@@ -160,6 +160,10 @@ def main() -> int:
 
     if args.output:
         out = args.output
+        # 路径卫生：输出路径的相对分量里不允许 ..（防误写穿目录；显式绝对路径不受影响）
+        if ".." in out.parts:
+            print(f"❌ --output 路径不允许包含 ..：{out}")
+            return 1
         block = ["", "## 章节边界（extract_chapters.py 生成，Stage 1/2/6 唯一切片真值）", ""]
         block.append("| 章号 | 起始行 | 字数 | 标题 |")
         block.append("|---|---|---|---|")
