@@ -69,7 +69,7 @@
 }
 ```
 
-### delta 十二类变更（对齐 liyu CHANGES）
+### delta 十三类变更（对齐 liyu CHANGES）
 
 | 类别 | 字段 | 防什么 |
 |---|---|---|
@@ -84,6 +84,7 @@
 | 下章承诺 | `next_chapter_commitments` | 断章不接 |
 | 能力边界 | `new_abilities` | 能力体系无中生有 |
 | 规则突破 | `rule_overrides`（理由+代价，登记进 overrides.md） | 长篇吃书 |
+| 写手发明 | `delta.inventions`（一句一条，≤6 条；进 context.md「写手发明」节，后续 spec 自动可见） | 写手在 spec 外确立的设定/人物不进账本，与后文章纲静默冲突 |
 | 结果 | `result` | 水章（无净变化） |
 
 ### 修订旧章的「此刻」保护
@@ -107,7 +108,7 @@
 - `rule_overrides` 同章最多 3 条；未登记的硬规则突破会被 G3 拒收
 - 改书名：`tracking_commit.py rename --project . --title 新书名`（book_title 的合法修改入口；concept.md 同步手动改）
 - 历史章修订：`gen_transaction.py commit --revision --chapter N`（N ≤ 账本最后提交章；协议允许，工具已支持）
-- ID 格式：伏笔 `F` + 三位数字（F001）；时间线 `E` 开头同理。delta 总字节 >1536 会有体积警告（长期超标请精简）
+- ID 格式：伏笔 `F` + 三位数字（F001）；时间线 `E` 开头同理。delta 总字节 >1536 有体积警告，>4096 拒收（长期超标请精简 knowledge 数组）
 - `reveal_status` 为「部分揭示/已揭示」时 `reveal_chapter` 必填
 - **新增伏笔（账本中无此 ID）必须填 `planned_resolution_chapter`**，否则 G3 拒收（强制回收计划）
 
@@ -188,8 +189,13 @@
 | 规则数据 | `writing-rules.json`（纪律双投影）、`check-rules/*.json`（机械病句）、`platform-sensitive-words.txt`、`word-count.json` |
 | 领域检查 | `checks.py`（G4–G6 + 字数 + outline 校验）、`check_continuity.py`（G3 advisory） |
 | 领域流程 | 五步主线（init/outline/draft/revise/archive）+ 六分支（scan/analyze/deslop/query/learn/polish） |
-| 领域知识 | `writing-methods/`（34 方法论，先查 INDEX）、`genre-prose-cards/`（32 题材卡）、`author-styles/`、`craft-canon.md`、`editor-checklist.md`、`platform-review.md` |
+| 领域知识 | `writing-methods/`（方法论库，先查 INDEX）、`genre-prose-cards/`（32 题材卡）、`author-styles/`、`craft-canon.md`（唯一人工清单权威）、`platform-review.md` |
 | 领域检测器 | `skills/branch/story-deslop/scripts/check-ai-patterns.js`（AI 味正则，G5 调用） |
+| 写手档案 | `writer_profile.py` + `.novel/writer.md`（写手 yeyue/Minimax M3 的文风基线/AI 味阈值/写前避开项） |
+
+### 写手档案（yeyue / Minimax M3）
+
+本书写手固定为 yeyue 子代理（Minimax M3）：正文由主 agent 委派 yeyue 执笔，主 agent 负责编排与校验（写手不冷读自己的稿）。AI 味与文风纠缠——同一判据对不同写手一头误伤、一头漏检（M3 实测；猫腻腔 em-dash 文风豁免是先例），故检测基线与写前避开项按写手实测存**单一档案** `.novel/writer.md`，记三层：**量化基线**（风格软校验与电报体提醒按档案执行）、**AI 味处置表**（`豁免` = 文风合法形态降 advisory；`盯防` + `阈值=N` 覆盖默认提醒线）、**写前避开项**（assemble_spec 注入 spec 风格指令）。校准入口 `writer_profile.py calibrate`（量化基线与检出表实测自动填，豁免/盯防裁定人工核订）；档案缺失逐层回退（写手档案 → style-anchor → 全局默认），零破坏。
 
 ### 路径纪律
 

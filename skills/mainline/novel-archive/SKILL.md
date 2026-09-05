@@ -48,8 +48,7 @@ python3 {SKILL_DIR}/scripts/learn.py add "<提炼后的写法>" --pattern-type {
 ```
 
 - 只记可复用模式（钩子设计/回收节奏/对话技巧），不记一次性剧情；没有值得记的就跳过，不强凑
-- **跨书沉淀**：眼前一亮的妙处/踩过的坑/文风技法 → `learn.py add "…" --scope author --section {妙处|问题|文风技法}`（写入 `.novel/writing-playbook.md`，下本书 spec 自动带提醒）
-- 记完同步给作者（全自动模式下汇报带一句，模式定义见 novel-init 偏好设置）
+- **跨书沉淀**（妙处/坑/文风技法 → `.novel/writing-playbook.md`）走 `learn.py add "…" --scope author`，详见 story-learn 支线
 
 ### 4. 进下一章
 
@@ -77,4 +76,3 @@ python3 {SKILL_DIR}/scripts/book_finish.py --project .    # 导出成书 → 全
 
 - check 未过不归档，绝不带病归档
 - 归档后正文冻结，不直接改
-- 不手改 tracking 账本

@@ -1,7 +1,7 @@
 # 题材趋势速查（扫榜支线瘦身版）
 
 > 题材清单/流派要点/书名命名已收敛到主线：
-> 题材卡 → `references/genre-prose-cards/`（32 张）；流派与题材 → `references/writing-methods/genre-catalog.md`；
+> 题材卡 → `references/genre-prose-cards/`（32 张）；流派与题材 → `references/writing-methods/genre-playbook.md`；
 > 书名命名技法 → `references/writing-methods/genre-readers.md`。本文只保留扫榜独有技巧：脑洞创作、边界感、扫榜方法。
 
 # 网文题材趋势与流派参考

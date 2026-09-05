@@ -120,6 +120,7 @@ description: |
 | `book_init.py` / `new_chapter.py` / `export_book.py` / `book_finish.py` | 见各子技能 | 建书/建章/导出/收尾 |
 | `outline_revise.py` / `outline_drift.py` / `check_continuity.py` | 见 novel-revise / archive | 大纲修订/漂移/连续性 |
 | `check_seam.py` | --project [--chapter N] | 跨章拼接断裂检测（advisory） |
+| `writer_profile.py` | calibrate/show | 写手档案（yeyue/M3 单写手：基线/AI味阈值/写前避开项） |
 | `platform_review.py` / `polish_apply.py` / `check_spec_copy.py` / `learn.py` | 见对应子技能 | 平台审稿/病句落盘/照搬检测/技法沉淀 |
 
 规则与阈值全是数据：改 `references/writing-rules.json`（写作纪律双投影）、`references/check-rules/*.json`（机械病句）、`references/word-count.json`（平台字数），不改代码。协议与架构详见 `references/architecture.md`。

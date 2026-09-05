@@ -69,7 +69,7 @@ python3 {SKILL_DIR}/scripts/scaffold_outline.py --project {书目录}
 
 **大纲级 AI 味自检**：否定排比改正面陈述；单场景转折连接词（然而/但是/却）≤1 次；空泛转场（随后/经过一番周折）必须补出谁做了什么。
 
-**方法论按需加载**（只读当次用的）：章纲节奏→outline-rhythm；情绪→emotional-arc-design；冲突→outline-conflict；剧情爆破→plot-booming；母型→save-the-cat-beats；题材写法→书目录 `题材卡.md`；其余查 INDEX 再读单份。
+**方法论按需加载**（只读当次用的）：章纲节奏→outline-rhythm；情绪→emotional-design；冲突→outline-conflict；剧情爆破→plot-booming；母型→save-the-cat-beats；题材写法→书目录 `题材卡.md`；其余查 INDEX 再读单份。
 
 ### 5. 推进
 
@@ -91,4 +91,3 @@ outline 完成 → 回到根 SKILL.md 入口跑 status，路由到 novel-draft�
 - 不写与契约冲突的大纲；大盘纲冲突时改大纲不改契约
 - 伏笔规划「埋哪收哪」必须清晰，细节留 draft 发挥
 - 人物卡不写动态处境；龙套不建卡
-- 不手改 pipeline.json / tracking 账本
