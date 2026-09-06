@@ -94,7 +94,7 @@ PREFERENCES_TEMPLATE = """# 作者偏好与能力索引
 ## 能力索引（已有能力，无需选择）
 - 调研：story-long-scan（扫榜）+ search 技能（多引擎搜索榜单/考据）
 - 文风：style-anchor.md（本目录）+ genre-prose-cards/（32 题材）+ story-long-analyze（拆书蒸馏）
-- 去AI味：banned-words.txt（本目录，用户自定义词表扩展位——当前去AI味闸门以 check-ai-patterns.js 内置词表为准，此文件尚未接入引擎）+ skills/branch/story-deslop/references/banned-words.md + check-ai-patterns.js
+- 去AI味：banned-words.txt（本目录，作者级禁用词种子——启用时拷成书目录 .deslop-extra-words，deslop 支线带 --extra-words 读取；主线闸门以 check-ai-patterns.js 内置词表为准）+ skills/branch/story-deslop/references/banned-words.md + check-ai-patterns.js
 - 方法论：references/writing-methods/（方法论库，先查 INDEX.md）+ references/craft-canon.md（唯一人工清单权威：特质/红线/编辑清单/质量自查）
 - 字数：references/word-count.json（平台）+ concept.md 目标篇幅（通用）
 """

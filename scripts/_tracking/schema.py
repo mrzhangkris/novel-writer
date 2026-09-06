@@ -978,7 +978,8 @@ def normalize_delta(
         "delta.rule_overrides may contain at most 3 items per chapter",
     )
     return {
-        "result": clean_text(delta.get("result"), "delta.result", max_bytes=480),
+        # result 同时渲染为下一章的 recent_chapters.summary（上限 360B），两处共用同一上限
+        "result": clean_text(delta.get("result"), "delta.result", max_bytes=360),
         "character_changes": character_changes,
         "foreshadow_changes": foreshadow_changes,
         "timeline_events": timeline_events,

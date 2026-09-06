@@ -336,7 +336,7 @@ def main() -> int:
         print("   伏笔候选只删不改（没发生的回收删掉）；story_time 按本章更新")
         print("   注意：如需退役 continuity_risks / long_term_constraints 条目，逐条填进 retired_context_items")
         print("   新增能力/概念填入 new_abilities；剧情打破世界硬规则时必须在 rule_overrides 登记（rule/reason/effective_chapter/payback）")
-        print("   填表约束：result ≤480 字节；constraints 只收字符串；character_snapshots 恰好等于 character_changes 的角色；退役条目须与账本原文逐字一致")
+        print("   填表约束：result ≤360 字节；constraints 只收字符串；character_snapshots 恰好等于 character_changes 的角色；退役条目须与账本原文逐字一致")
         print("   ── 字段速查（schema 白名单，填错拒收）──")
         print("   snapshot 字段：identity / location / goal / state / alive(布尔) / abilities_resources / relationships / knowledge / open_threads")
         print("   timeline 字段：id(E001) / story_time / objective_fact(非 fact) / reader_knowledge / characters(数组) / reveal_status / reveal_chapter(部分揭示|已揭示必填)")

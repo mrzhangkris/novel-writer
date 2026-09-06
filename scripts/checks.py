@@ -583,6 +583,18 @@ def cmd_style_baseline(draft_path: Path) -> int:
         lo, hi = max(1, para[0] - 1), para[1] + 2
         flag = "✅" if lo <= med_para <= hi else "⚠️"
         print(f"   {flag} 段落中位 {med_para} 行（基线 {para[0]}-{para[1]} 行，容差后 {lo}-{hi}）")
+    # 节奏呼吸（深层 AI 味检测）：通篇同一呼吸频率=均匀的克制，机器测不到逐句层——
+    # 用长句分布代理：长句阈值按写手基线相对化（基线上限×2），峰值句 ×2.5。
+    # 书 2 实测：健康章 9-20 个长句，坍缩章（收束/情感峰值反而最扁）仅 1-4 个。
+    if sent:
+        breath_thr = int(sent[1] * 2)
+        peak_thr = int(sent[1] * 2.5)
+        lens = [cjk_len(s) for s in split_sentences(text)]
+        longs = [n for n in lens if n >= breath_thr]
+        peaks = [n for n in lens if n >= peak_thr]
+        flag = "✅" if len(longs) >= 5 else "⚠️"
+        hint = "" if len(longs) >= 5 else "——全章呼吸过扁（深层 AI 味）：在情感峰值/兑现点放 1-2 处长句呼吸"
+        print(f"   {flag} 节奏呼吸：≥{breath_thr} 字长句 {len(longs)} 个（建议 ≥5）、≥{peak_thr} 字峰值句 {len(peaks)} 个{hint}")
     return 0
 
 

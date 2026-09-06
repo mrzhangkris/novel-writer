@@ -328,12 +328,20 @@ def _project_pacing(root: Path) -> None:
     if not section:
         return
     entries: dict[int, str] = {}
+    explicit: dict[int, str] = {}
     for raw in section.group(1).splitlines():
         line = raw.strip().lstrip("-").strip()
         if not line:
             continue
         for part in re.split(r"[、；;，,]", line):
-            m = re.match(r"第\s*(\d+)\s*章\s*[：:]?\s*(\S.*)", part.strip())
+            part = part.strip()
+            # 显式强度标记优先：第N章【中】：…（人工在情绪曲线里直接标级）
+            em = re.match(r"第\s*(\d+)\s*章\s*【(低|中|高)】[：:]?\s*(\S.*)", part)
+            if em:
+                entries[int(em.group(1))] = em.group(3).strip()
+                explicit[int(em.group(1))] = em.group(2)
+                continue
+            m = re.match(r"第\s*(\d+)\s*章\s*[：:]?\s*(\S.*)", part)
             if m:
                 entries[int(m.group(1))] = m.group(2).strip()
     if not entries:
@@ -346,10 +354,11 @@ def _project_pacing(root: Path) -> None:
             return "低"
         return "中"
 
-    new_rows = {
-        ch: f"| 第{ch}章 | {intensity(note)} | {note}（自动投影，人工核订） |"
-        for ch, note in sorted(entries.items())
-    }
+    new_rows = {}
+    for ch, note in sorted(entries.items()):
+        level = explicit.get(ch) or intensity(note)
+        mark = "" if ch in explicit else "（自动投影，人工核订）"
+        new_rows[ch] = f"| 第{ch}章 | {level} | {note}{mark} |"
     # 合并：曲线内的章号以投影为准刷新；曲线外的人工行原样保留
     merged: dict[int, str] = {}
     for line in pacing_path.read_text(encoding="utf-8").splitlines():
@@ -380,7 +389,7 @@ def _project_pacing(root: Path) -> None:
             continue
         out.append(line)
     pacing_path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
-    print(f"   📊 pacing.md 已从大纲情绪曲线投影初稿（{len(merged)} 章，强度为启发判定，人工核订）")
+    print(f"   📊 pacing.md 已从大纲情绪曲线投影初稿（{len(merged)} 章；显式【低/中/高】标记优先，其余启发判定，人工核订）")
 
 
 def cmd_advance(args: argparse.Namespace) -> int:

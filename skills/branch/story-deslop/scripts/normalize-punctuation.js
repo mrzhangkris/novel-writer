@@ -18,6 +18,10 @@ const options = {
   files: [],
 };
 
+// 相邻终止符坍缩用（定义在 collapseAdjacentTerminators，常量须先于 main 执行初始化）
+const TERMINATOR_CHARS = '，,。.！!？?；;';
+const TERMINATOR_RUN = new RegExp('([' + TERMINATOR_CHARS + '][' + TERMINATOR_CHARS + ']+)');
+
 for (let i = 2; i < process.argv.length; i += 1) {
   const arg = process.argv[i];
   if (arg === '--check') {
@@ -168,6 +172,10 @@ function normalizeDocument(input, quoteMode) {
     } else if (!commentOpen) {
       commentStart = null;
     }
+
+    const collapseResult = collapseAdjacentTerminators(line, lineNo);
+    findings.push(...collapseResult.findings);
+    line = collapseResult.line;
 
     const quoteResult = normalizeQuotes(line, quoteMode, quoteOpen, lineNo);
     findings.push(...quoteResult.findings);
@@ -349,6 +357,45 @@ function choosePauseReplacement(text, start, length) {
   if (/^(因为|原来|这是|那是|也就是|换句话|说白了|所谓|答案|原因|结果|真相|问题在于)/.test(rest)) return '：';
   if (/(原因|答案|真相|结果|结论|问题|选择|意思)$/.test(text.slice(0, start).trim())) return '：';
   return '，';
+}
+
+// 相邻终止符坍缩：LLM 长上下文退化噪声（「沉，。」「群，，」——实测 200 章书
+// 64 章 1075 处）。连续中英文逗号/句号/叹号/问号/分号混排坍缩为单一最强终止符：
+// 含中文句终（。！？）取最后一个，否则取逗号。省略号与引号不在此列（别处已管）。
+function collapseAdjacentTerminators(line, lineNo) {
+  const findings = [];
+  let output = '';
+  let rest = line;
+  let offset = 0;
+
+  for (;;) {
+    const match = rest.match(TERMINATOR_RUN);
+    if (!match) break;
+    const run = match[1];
+    const at = match.index;
+    const after = rest.slice(at + run.length);
+    // 后随确定性闭符（闭括号/直角引号/中文右引号）时不坍缩。直引号 " 开闭同形、
+    // 无法判定开闭，不豁免（实测直引号书 19 处真残损被它漏掉）。
+    if (after && /^[）)」』”]/.test(after)) {
+      output += rest.slice(0, at + run.length);
+      rest = after;
+      offset += at + run.length;
+      continue;
+    }
+    const finals = run.match(/[。！？]/g);
+    const replacement = finals && finals.length ? finals[finals.length - 1] : '，';
+    output += rest.slice(0, at) + replacement;
+    findings.push({
+      line: lineNo,
+      column: offset + at + 1,
+      type: 'adjacent-terminators',
+      message: '退化标点「' + run + '」坍缩为「' + replacement + '」。',
+    });
+    rest = after;
+    offset += at + replacement.length;
+  }
+  output += rest;
+  return { line: output, findings };
 }
 
 function previousNonSpace(text, index) {

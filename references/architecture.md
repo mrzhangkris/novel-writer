@@ -30,7 +30,7 @@
   "chapter_title": "…",
   "expected_state_revision": 9,
   "delta": {
-    "result": "本章结果一句话（≤480 字节）",
+    "result": "本章结果一句话（≤360 字节；它同时是下一章的 recent_chapters 摘要）",
     "character_changes": [{"name": "…", "change": "…"}],
     "plot_points":  ["本章推进/新增的情节点（≤8 条）"],
     "foreshadow_changes": [{"action": "upsert|delete", "id": "F027（三位格式 F\\d{3}）", "summary": "…",
@@ -103,7 +103,7 @@
 - `active_character_names` ⊆ `character_snapshots`（恰好相等：少报缺快照，多报非核心）
 - `character_snapshots` 必须恰好等于本章出场核心角色集合（未出场者两边都不进）
 - `context.thread` 多线叙事必填，缺省「主线」；`active_scene` 可选但推荐每章更新（写前核对上一章锚点）
-- `delta.result` ≤480 字节；`constraints` 只收字符串
+- `delta.result` ≤360 字节（同时是下章 recent_chapters 摘要，共用自己的上限）；`constraints` 只收字符串
 - 替换/删除 `continuity_risks` 旧条目必须把原文逐字放进 `delta.retired_context_items`
 - `rule_overrides` 同章最多 3 条；未登记的硬规则突破会被 G3 拒收
 - 改书名：`tracking_commit.py rename --project . --title 新书名`（book_title 的合法修改入口；concept.md 同步手动改）

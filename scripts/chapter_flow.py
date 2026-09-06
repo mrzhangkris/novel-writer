@@ -81,7 +81,7 @@ def plan(root: Path) -> list[str]:
         return out
     if steps.get("draft") != "done":
         out.append(f"1) 生成并填事务：{SK}/gen_transaction.py commit --project {ROOT}")
-        out.append("   填 tx（result≤480B、constraints 只收字符串、快照=changes 角色、退役逐字）")
+        out.append("   填 tx（result≤360B、constraints 只收字符串、快照=changes 角色、退役逐字）")
         out.append(f"   提交：{SK}/tracking_commit.py commit --project {ROOT} --input .story/tx-chapter-{chapter:03d}.json")
         out.append(f"2) 闸门：{SK}/pipeline.py advance draft（字数/去AI味/衔接/履约/风格基线/说教密度/章节定位）")
         out.append(f"3) 冷读：{SK}/coldread_material.py --chapter {chapter} --write-review → spawn 子代理读 draft+review.md 评分（四维 + 红线标签 6 项）")
@@ -403,16 +403,25 @@ def finish(root: Path, chapter: int, coldread: str | None, polish: bool = False)
             return rc
     print(f"  ✅ 第 {chapter} 章闭环完成。下一章：chapter_flow.py prepare --project {root}")
     # AI 味 advisory 超阈值提醒（M3 实测：微动作复读/短段偏密等 advisory 始终残留，
-    # 写作流程不会主动清）。超阈值 → 建议 story-polish 清理；只提醒不自动调用。
+    # 写作流程不会主动清）。超阈值 → 建议 story-deslop 清理（AI 味是腔调问题，Gate C/D）；
+    # story-polish 只管语病。只提醒不自动调用。
     over = _ai_flavor_over_threshold(root, chapter)
     sent = _sentence_len_alert(root, chapter)
     alerts = "；".join(a for a in (over, sent) if a)
     if alerts:
         print(f"  💡 本章 AI 味 advisory 超阈值（{alerts}）：写前避开项是软约束，压不住属正常——"
-              f"spawn story-polish 子代理按写手档案盯防项挑病句清单（{WRITER_NAME} 档案见 .novel/writer.md），"
-              "采纳项用 polish_apply.py 批量替换")
+              f"走 story-deslop 支线按写手档案盯防项清（{WRITER_NAME} 档案见 .novel/writer.md，Gate C/D 为主），"
+              "语病类才走 story-polish；改完重跑 checks draft 复验")
     if polish:
         _write_polish_list(root, chapter)
+    # 写手发明提醒：本章有新申报时提示核对后文章纲（发明可能改写后续走向）
+    try:
+        invs = json.loads((root / "tracking/_tracking-state.json").read_text(encoding="utf-8")).get("inventions") or []
+        n = len([i for i in invs if i.get("chapter") == chapter])
+        if n:
+            print(f"  💡 本章申报了 {n} 条写手发明：核对后文章纲是否需调整（outline_revise.py），发明已自动进后续 spec")
+    except (OSError, json.JSONDecodeError):
+        pass
     # 文风锚校准提醒（写手档案没接住基线时的兜底提醒；chapters 目录数为实际已写章数）
     anchor = root.parent / ".novel" / "style-anchor.md"
     chapters_dir = root / "chapters"

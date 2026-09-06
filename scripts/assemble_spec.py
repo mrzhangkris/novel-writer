@@ -235,12 +235,12 @@ def pacing_conflict_lines(root: Path, chapter: int, actions: dict[str, str]) -> 
         if stance["intensity"] == "低":
             out.append(
                 f"- ⚠️ pacing 冲突：pacing 将第 {chapter} 章定位为低强度缓冲章，"
-                f"但 {fid} 计划本章{action}——以 pacing 为准，调整伏笔动作"
+                f"但 {fid} 计划本章{action}——先人工核订 pacing.md 该行（可能是自动投影初稿），再定伏笔动作"
             )
         if fid in stance["holds"]:
             out.append(
                 f"- ⚠️ pacing 冲突：pacing 第 {chapter} 章安排不推进 {fid}，"
-                f"但本指令要求{action}——以 pacing 为准，调整伏笔动作"
+                f"但本指令要求{action}——先人工核订 pacing.md 该行（可能是自动投影初稿），再定伏笔动作"
             )
     return out
 
@@ -398,7 +398,7 @@ def card_hook_lines(root: Path) -> list[str]:
     return lines
 
 
-def foreshadow_lines(root: Path, chapter: int, outline_plants: list[str]) -> list[str]:
+def foreshadow_lines(root: Path, chapter: int, outline_plants: list[str]) -> tuple[list[str], dict[str, str]]:
     rows = parse_foreshadow_table(read_text(root / "tracking" / "foreshadows.md"))
     lines = []
     closed = []
@@ -430,8 +430,7 @@ def foreshadow_lines(root: Path, chapter: int, outline_plants: list[str]) -> lis
         shown = closed[-20:]
         suffix = f"（共 {len(closed)} 条，仅列最近 {len(shown)} 条）" if len(closed) > 20 else ""
         lines.append(f"- ⛔ 已了结，本章严禁重复写或再当悬念用{suffix}：{'、'.join(shown)}")
-    lines.extend(pacing_conflict_lines(root, chapter, actions))
-    return lines
+    return lines, actions
 
 
 LABEL_ONLY = re.compile(r"^- ?(读者已知|读者不知|故事时间|距上章过去|本章目标|场景安排|关键事件|章末钩子|新概念)[：:]?$")
@@ -481,7 +480,9 @@ def assemble(root: Path, chapter: int, force: bool = False) -> tuple[Path, bool]
         style.insert(0, f"- 当前写手：{WRITER_NAME}（{WRITER_MODEL}；风格基线与 AI 味提醒阈值按写手档案校准）")
         style.extend(f"- 写手避开：{item}" for item in writer_prof["avoid"])
     hooks = card_hook_lines(root)
-    fores = foreshadow_lines(root, chapter, plants)
+    fores, fid_actions = foreshadow_lines(root, chapter, plants)
+    # pacing 冲突警告是机器生成的动态行：单独计算，供已组装 spec 刷新旧警告用
+    pacing_warnings = pacing_conflict_lines(root, chapter, fid_actions)
 
     def section(title: str) -> str:
         """返回该小节的当前内容（标题行之后、下一个标题之前）。"""
@@ -585,17 +586,27 @@ def assemble(root: Path, chapter: int, force: bool = False) -> tuple[Path, bool]
     # 伏笔指令
     fi = section("伏笔指令")
     if section_empty(fi):
+        fores = fores + pacing_warnings
         replace_section("伏笔指令", ("\n".join(fores) + "\n") if fores else "- 本章无伏笔动作\n")
     else:
-        # 已组装过的 spec：只补缺失的「植入」行（随新大纲新增的伏笔），不覆盖 AI 注记
+        # 已组装过的 spec：①剔除陈旧的 pacing 冲突警告（机器生成行，按最新 pacing.md
+        # 重算——人工核订 pacing 后旧警告不得残留误导写手）②只补缺失的「植入」行
+        # （随新大纲新增的伏笔），不覆盖 AI 注记
+        kept = [l for l in fi.splitlines() if "⚠️ pacing 冲突" not in l]
+        changed = kept != fi.splitlines()
         missing = [
             line
             for line in fores
             if line.startswith("- 植入 ") and line.split("：", 1)[0] not in fi
         ]
-        if missing:
-            replace_section("伏笔指令", fi.rstrip("\n") + "\n" + "\n".join(missing) + "\n")
-            print("   伏笔指令已补充缺失植入行（随新大纲）")
+        if changed or missing or pacing_warnings:
+            new_fi = "\n".join(kept).rstrip("\n")
+            add = missing + pacing_warnings
+            if add:
+                new_fi = new_fi + "\n" + "\n".join(add)
+            replace_section("伏笔指令", new_fi + "\n")
+            why = "、".join(x for x in ("陈旧警告清理" if changed else "", "缺失植入行" if missing else "", "pacing 冲突刷新" if pacing_warnings else "") if x)
+            print(f"   伏笔指令已更新（{why}）")
 
     # 题材要点
     tp = section("题材要点")
